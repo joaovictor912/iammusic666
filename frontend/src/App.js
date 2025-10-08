@@ -1,13 +1,13 @@
 // ============================================
-// ARQUIVO COMPLETO: src/App.js
+// ARQUIVO COMPLETO E CORRIGIDO: src/App.js
 // ============================================
 
+// CORREÇÃO: Adicionados 'useState', 'useEffect' e 'useRef' na linha de importação.
 import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 
 const Home = () => {
   const [authorized, setAuthorized] = useState(false);
-  const [trackIds, setTrackIds] = useState([]);
   const [seedTracks, setSeedTracks] = useState([]);
   const [showSeeds, setShowSeeds] = useState(false);
   const [playlist, setPlaylist] = useState([]);
@@ -86,28 +86,22 @@ const Home = () => {
   };
 
   const addTrackFromData = (trackData) => {
-    if (!trackIds.includes(trackData.id)) {
-      const newTrackIds = [...trackIds, trackData.id];
-      setTrackIds(newTrackIds);
-      
-      // Adicionar aos detalhes das seeds
-      setSeedTracks([...seedTracks, trackData]);
-      
-      setInputValue('');
-      setSuggestions([]);
-      setShowSuggestions(false);
-      setCoverArtUrl(trackData.cover);
-      setTrackName(trackData.name);
-      setArtistName(trackData.artist);
-      setPreviewUrl(trackData.previewUrl);
-      
-      if (!trackData.previewUrl) {
-        alert("Esta música não tem uma prévia de áudio disponível.");
-      }
-    } else {
-      alert('Esta música já foi adicionada.');
-    }
-  };
+  if (!seedTracks.some(track => track.id === trackData.id)) {
+    setSeedTracks([...seedTracks, trackData]); 
+    
+    setInputValue('');
+    setSuggestions([]);
+    setShowSuggestions(false);
+    setCoverArtUrl(trackData.albumImages[0]?.url || ''); 
+    
+    setTrackName(trackData.name);
+    setArtistName(trackData.artist);
+    setPreviewUrl(trackData.previewUrl);
+
+  } else {
+    alert('Esta música já foi adicionada.');
+  }
+};
 
   const addTrackId = async () => {
     const query = inputValue.trim();
@@ -136,27 +130,23 @@ const Home = () => {
   };
 
   const selectSuggestion = (track) => {
-  // 1. Coloca o nome completo da música e artista no campo de input.
-  setInputValue(`${track.name} ${track.artist}`);
-
-  // 2. Limpa e esconde as sugestões. (Problema acontece aqui)
-  setSuggestions([]);
-  setShowSuggestions(false);
-
-  // 3. Usa um pequeno timeout...
-  setTimeout(() => {
-    addTrackId();
-  }, 0);
-};
+    addTrackFromData(track);
+  };
 
   const removeSeedTrack = (index) => {
-    const newTrackIds = trackIds.filter((_, i) => i !== index);
     const newSeedTracks = seedTracks.filter((_, i) => i !== index);
-    setTrackIds(newTrackIds);
     setSeedTracks(newSeedTracks);
   };
 
+  const removeTrackFromPlaylist = (indexToRemove) => {
+    setPlaylist(currentPlaylist => 
+      currentPlaylist.filter((_, index) => index !== indexToRemove)
+    );
+  };
+
   const handleAnalyze = async () => {
+    const trackIds = seedTracks.map(track => track.id);
+
     if (trackIds.length === 0) {
       alert('Adicione pelo menos uma música para gerar a playlist.');
       return;
@@ -171,9 +161,7 @@ const Home = () => {
       });
       
       const data = await res.json();
-      
       if (data.error) throw new Error(data.error);
-      
       setPlaylist(data.similarities || []);
     } catch (err) {
       alert('Erro na análise: ' + err.message);
@@ -223,29 +211,34 @@ const Home = () => {
   return (
     <div style={styles.fullscreenUi}>
       <header style={styles.ipodHeader}>
-        <div style={styles.headerTitle}>
-          {authorized ? 'Now Playing' : 'PLAYLIST MAKER'}
-        </div>
-        
-        {authorized && (
-          <div style={styles.volumeControlContainer}>
-            <svg style={styles.volumeIcon} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-              <path d="M5 17h-5v-10h5v10zm2-10v10l9 5v-20l-9 5zm11.008 2.093c.742.743 1.2 1.77 1.192 2.907-.008 1.137-.458 2.164-1.2 2.907l-1.414-1.414c.389-.39.624-.928.622-1.493-.002-.565-.24-1.102-.622-1.493l1.414-1.414zm3.555-3.556c1.488 1.488 2.404 3.518 2.402 5.663-.002 2.145-.92 4.175-2.402 5.663l-1.414-1.414c1.118-1.117 1.802-2.677 1.8-4.249-.002-1.572-.69-3.132-1.8-4.249l1.414-1.414z"/>
-            </svg>
-            <input 
-              type="range" 
-              min="0" 
-              max="1" 
-              step="0.01" 
-              value={volume}
-              onChange={e => setVolume(parseFloat(e.target.value))}
-              style={styles.volumeSlider}
-            />
-          </div>
-        )}
-        
-        <span style={styles.batteryIcon}>▮▮▮▯</span>
-      </header>
+  <div style={styles.headerTitle}>
+    {authorized ? 'Now Playing' : 'PLAYLIST MAKER'}
+  </div>
+  
+  {authorized && (
+    // A correção está neste 'div' abaixo. Ele é o container de tudo.
+    <div style={{
+      ...styles.volumeControlContainer,
+      // A lógica que desabilita o controle é aplicada aqui
+      ...(!previewUrl ? styles.volumeControlDisabled : {})
+    }}>
+      <svg style={styles.volumeIcon} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+        <path d="M5 17h-5v-10h5v10zm2-10v10l9 5v-20l-9 5zm11.008 2.093c.742.743 1.2 1.77 1.192 2.907-.008 1.137-.458 2.164-1.2 2.907l-1.414-1.414c.389-.39.624-.928.622-1.493-.002-.565-.24-1.102-.622-1.493l1.414-1.414zm3.555-3.556c1.488 1.488 2.404 3.518 2.402 5.663-.002 2.145-.92 4.175-2.402 5.663l-1.414-1.414c1.118-1.117 1.802-2.677 1.8-4.249-.002-1.572-.69-3.132-1.8-4.249l1.414-1.414z"/>
+      </svg>
+      <input 
+        type="range" 
+        min="0" 
+        max="1" 
+        step="0.01" 
+        value={volume}
+        onChange={e => setVolume(parseFloat(e.target.value))}
+        style={styles.volumeSlider}
+      />
+    </div>
+  )}
+  
+  <span style={styles.batteryIcon}>▮▮▮▯</span>
+</header>
       
       <main style={styles.ipodBody}>
         <div style={styles.artworkPanel}>
@@ -308,17 +301,24 @@ const Home = () => {
                         key={index}
                         style={styles.suggestionItem}
                         onMouseDown={(e) => {
-                          e.preventDefault(); // Previne conflito com blur
+                          e.preventDefault();
                           selectSuggestion(track);
                         }}
                       >
                         <img 
-                          src={track.cover} 
-                          alt={track.name}
-                          style={styles.suggestionCover}
+                          src={track.albumImages?.[0]?.url || ''} 
+                          alt={track.name} 
+                          style={styles.seedCover}
                         />
                         <div style={styles.suggestionInfo}>
-                          <div style={styles.suggestionName}>{track.name}</div>
+                          <div style={styles.suggestionName}>
+                            {track.name}
+                            {track.previewUrl && (
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="#34c759" style={{ marginLeft: '8px', verticalAlign: 'middle' }}>
+                                <path d="M8 5v14l11-7z" />
+                              </svg>
+                            )}
+                          </div>
                           <div style={styles.suggestionArtist}>{track.artist}</div>
                         </div>
                       </div>
@@ -339,22 +339,22 @@ const Home = () => {
                     style={{
                       ...styles.ipodButton,
                       ...styles.mixButton,
-                      ...(loading || trackIds.length === 0 ? styles.buttonDisabled : {})
+                      ...(loading || seedTracks.length === 0 ? styles.buttonDisabled : {})
                     }} 
-                    disabled={loading || trackIds.length === 0}
+                    disabled={loading || seedTracks.length === 0}
                   >
                     {loading ? 'Mixing...' : 'Mix Playlist'}
                   </button>
                 </div>
               </div>
               
-              {trackIds.length > 0 && (
+              {seedTracks.length > 0 && (
                 <div>
                   <div 
                     style={styles.trackCounter}
                     onClick={() => setShowSeeds(!showSeeds)}
                   >
-                    <span>{trackIds.length} seed track{trackIds.length !== 1 ? 's' : ''} added</span>
+                    <span>{seedTracks.length} seed track{seedTracks.length !== 1 ? 's' : ''} added</span>
                     <svg 
                       width="12" 
                       height="12" 
@@ -373,7 +373,7 @@ const Home = () => {
                       {seedTracks.map((track, index) => (
                         <li key={index} style={styles.seedListItem}>
                           <img 
-                            src={track.cover} 
+                            src={track.albumImages[2]?.url || track.albumImages[0]?.url || ''} // Usa a imagem pequena
                             alt={track.name} 
                             style={styles.seedCover}
                           />
@@ -418,7 +418,7 @@ const Home = () => {
                       <li key={index} style={styles.ipodListItem}>
                         <div style={styles.trackInfoContainer}>
                           <img 
-                            src={track.cover} 
+                            src={track.albumImages?.[0]?.url || ''} 
                             alt={track.name} 
                             style={styles.trackCover}
                           />
@@ -427,9 +427,13 @@ const Home = () => {
                             <div style={styles.listItemArtist}>{track.artist}</div>
                           </div>
                         </div>
-                        <div style={styles.similarityBadge}>
-                          {track.similarity}%
-                        </div>
+                        <button
+                          onClick={() => removeTrackFromPlaylist(index)}
+                          style={styles.removeButton}
+                          title="Remove track"
+                        >
+                          ✕
+                        </button>
                       </li>
                     ))}
                   </ul>
@@ -443,7 +447,9 @@ const Home = () => {
   );
 };
 
+// ... (Copie o seu objeto 'styles' inteiro aqui)
 const styles = {
+  // ... todas as suas definições de estilo
   fullscreenUi: {
     display: 'flex',
     flexDirection: 'column',
@@ -558,7 +564,7 @@ const styles = {
     borderRadius: '8px',
     boxShadow: '0 8px 24px rgba(0,0,0,0.35), 0 2px 8px rgba(0,0,0,0.2)',
     transition: 'transform 0.3s cubic-bezier(0.4, 0.0, 0.2, 1)',
-    imageRendering: 'high-quality', // Alta qualidade de renderização
+    imageRendering: 'high-quality',
     objectFit: 'cover',
   },
   artworkInfo: {
@@ -618,7 +624,7 @@ const styles = {
     background: 'linear-gradient(to bottom, #ffffff, #f0f0f0)',
     border: '1px solid #b0b0b4',
     borderRadius: '8px',
-    padding: '12px 24px', // Tamanho original maior para o botão de conexão
+    padding: '12px 24px',
     fontSize: '14px',
     fontWeight: '500',
     cursor: 'pointer',
@@ -639,7 +645,7 @@ const styles = {
     transition: 'all 0.15s cubic-bezier(0.4, 0.0, 0.2, 1)',
     color: '#1a1a1a',
     fontFamily: 'inherit',
-    flex: 1, // Mescla tamanhos iguais para Add Track e Mix
+    flex: 1,
   },
   mixButton: {
     background: 'linear-gradient(to bottom, #007aff, #0051d5)',
@@ -652,6 +658,10 @@ const styles = {
     color: '#fff',
     borderColor: '#28a745',
     fontWeight: '600',
+     flex: 'none',
+    width: 'fit-content',
+    padding: '8px 16px',
+    fontSize: '13px',
   },
   buttonDisabled: {
     opacity: 0.5,
@@ -713,7 +723,7 @@ const styles = {
     height: '40px',
     borderRadius: '4px',
     objectFit: 'cover',
-    imageRendering: 'high-quality', // Alta qualidade
+    imageRendering: 'high-quality',
   },
   seedInfo: {
     flex: 1,
@@ -764,7 +774,7 @@ const styles = {
     height: '45px',
     borderRadius: '4px',
     objectFit: 'cover',
-    imageRendering: 'high-quality', // Alta qualidade
+    imageRendering: 'high-quality',
   },
   suggestionInfo: {
     flex: 1,
@@ -822,7 +832,7 @@ const styles = {
     borderRadius: '4px',
     objectFit: 'cover',
     boxShadow: '0 2px 4px rgba(0,0,0,0.15)',
-    imageRendering: 'high-quality', // Alta qualidade
+    imageRendering: 'high-quality',
   },
   listItemName: {
     fontSize: '15px',
@@ -841,7 +851,14 @@ const styles = {
     borderRadius: '12px',
     fontSize: '12px',
     fontWeight: '600',
+  
   },
+
+  volumeControlDisabled: {
+  opacity: 0.4,
+  pointerEvents: 'none',
+},
+
 };
 
 function App() {

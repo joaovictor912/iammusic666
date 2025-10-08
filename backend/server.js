@@ -1,7 +1,3 @@
-// ============================================
-// ARQUIVO: server.js (Backend Node.js/Express)
-// ============================================
-
 const express = require('express');
 const cors = require('cors');
 const SpotifyWebApi = require('spotify-web-api-node');
@@ -17,78 +13,80 @@ const spotifyApi = new SpotifyWebApi({
   clientId: process.env.SPOTIFY_CLIENT_ID,
   clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
   redirectUri: 'http://127.0.0.1:5000/callback',
+  tokenExpirationEpoch: 0
 });
 
-// ========== AUTENTICAÇÃO ==========
+async function refreshTokenIfNeeded() {
+  const expirationTime = spotifyApi.tokenExpirationEpoch || 0;
+  const currentTime = new Date().getTime() / 1000;
+  const timeUntilExpiration = expirationTime - currentTime;
+
+  if (timeUntilExpiration < 300) {
+    console.log('Token prestes a expirar ou inválido, renovando agora...');
+    try {
+      const data = await spotifyApi.refreshAccessToken();
+      const { access_token, expires_in } = data.body;
+      spotifyApi.setAccessToken(access_token);
+      spotifyApi.tokenExpirationEpoch = (new Date().getTime() / 1000) + expires_in;
+      console.log('Token renovado com sucesso! Nova expiração:', new Date(spotifyApi.tokenExpirationEpoch * 1000));
+    } catch (error) {
+      console.error('Erro ao renovar o token:', error.message);
+      throw new Error('Falha ao renovar o token de autenticação.');
+    }
+  } else {
+    console.log(`Token ainda é válido por ${Math.round(timeUntilExpiration / 60)} minutos.`);
+  }
+}
+
 app.get('/auth', (req, res) => {
   const scopes = [
     'user-read-private',
     'user-read-email',
     'playlist-modify-public',
     'playlist-modify-private',
-    'user-top-read' // ADICIONADO: necessário para recommendations
+    'user-top-read'
   ];
   const authorizeURL = spotifyApi.createAuthorizeURL(scopes);
-  console.log('Auth URL gerada:', authorizeURL);
   res.redirect(authorizeURL);
 });
 
 app.get('/callback', async (req, res) => {
   const { code, error } = req.query;
   if (error) {
-    console.error('Erro na autenticação:', error);
-    return res.redirect('http://127.0.0.1:3000/?error=auth_failed');
+    return res.redirect(`http://127.0.0.1:3000/?error=auth_failed`);
   }
   if (!code) {
-    return res.redirect('http://127.0.0.1:3000/?error=no_code');
+    return res.redirect(`http://127.0.0.1:3000/?error=no_code`);
   }
-
   try {
     const data = await spotifyApi.authorizationCodeGrant(code);
     const { access_token, refresh_token, expires_in } = data.body;
-
     spotifyApi.setAccessToken(access_token);
     spotifyApi.setRefreshToken(refresh_token);
-
-    // NOVO: Renovar token automaticamente antes de expirar
-    setTimeout(async () => {
-      try {
-        const refreshData = await spotifyApi.refreshAccessToken();
-        spotifyApi.setAccessToken(refreshData.body.access_token);
-        console.log('Token renovado automaticamente!');
-      } catch (err) {
-        console.error('Erro ao renovar token:', err);
-      }
-    }, (expires_in - 300) * 1000); // Renova 5 min antes de expirar
-
+    spotifyApi.tokenExpirationEpoch = (new Date().getTime() / 1000) + expires_in;
     console.log('Tokens obtidos com sucesso!');
     res.redirect('http://127.0.0.1:3000/?authorized=true');
   } catch (err) {
     console.error('Erro ao obter tokens:', err);
-    res.redirect('http://127.0.0.1:3000/?error=token_fail');
+    res.redirect(`http://127.0.0.1:3000/?error=token_fail`);
   }
 });
 
-// ========== BUSCA DE MÚSICA ==========
 app.post('/search', async (req, res) => {
-  if (!spotifyApi.getAccessToken()) {
-    return res.status(401).json({ error: 'Usuário não autenticado.' });
-  }
-  
-  const { query } = req.body;
-  if (!query) return res.status(400).json({ error: 'Query required' });
-  
   try {
+    await refreshTokenIfNeeded();
+    const { query } = req.body;
+    if (!query) return res.status(400).json({ error: 'Query required' });
+
     const searchData = await spotifyApi.searchTracks(query, { limit: 1 });
     const track = searchData.body.tracks.items[0];
-    
     if (!track) return res.status(404).json({ error: 'No track found' });
-    
+
     res.json({
       id: track.id,
       name: track.name,
       artist: track.artists[0].name,
-      cover: track.album.images[0]?.url || '',
+      albumImages: track.album.images,
       previewUrl: track.preview_url
     });
   } catch (err) {
@@ -97,27 +95,21 @@ app.post('/search', async (req, res) => {
   }
 });
 
-// ========== BUSCAR SUGESTÕES (AUTOCOMPLETE) ==========
 app.post('/search-suggestions', async (req, res) => {
-  if (!spotifyApi.getAccessToken()) {
-    return res.status(401).json({ error: 'Usuário não autenticado.' });
-  }
-  
-  const { query } = req.body;
-  if (!query || query.trim().length < 2) {
-    return res.json({ tracks: [] });
-  }
-  
   try {
+    await refreshTokenIfNeeded();
+    const { query } = req.body;
+    if (!query || query.trim().length < 2) {
+      return res.json({ tracks: [] });
+    }
     const searchData = await spotifyApi.searchTracks(query, { limit: 8 });
     const tracks = searchData.body.tracks.items.map(track => ({
       id: track.id,
       name: track.name,
       artist: track.artists.map(a => a.name).join(', '),
-      cover: track.album.images[2]?.url || track.album.images[0]?.url || '',
+      albumImages: track.album.images,
       previewUrl: track.preview_url
     }));
-    
     res.json({ tracks });
   } catch (err) {
     console.error('Erro ao buscar sugestões:', err);
@@ -125,26 +117,20 @@ app.post('/search-suggestions', async (req, res) => {
   }
 });
 
-// ========== BUSCAR DETALHES DE MÚLTIPLAS TRACKS ==========
 app.post('/get-tracks', async (req, res) => {
-  if (!spotifyApi.getAccessToken()) {
-    return res.status(401).json({ error: 'Usuário não autenticado.' });
-  }
-  
-  const { trackIds } = req.body;
-  if (!trackIds || trackIds.length === 0) {
-    return res.status(400).json({ error: 'Track IDs required' });
-  }
-  
   try {
+    await refreshTokenIfNeeded();
+    const { trackIds } = req.body;
+    if (!trackIds || trackIds.length === 0) {
+      return res.status(400).json({ error: 'Track IDs required' });
+    }
     const tracksData = await spotifyApi.getTracks(trackIds);
     const tracks = tracksData.body.tracks.map(track => ({
       id: track.id,
       name: track.name,
       artist: track.artists.map(a => a.name).join(', '),
-      cover: track.album.images[2]?.url || track.album.images[0]?.url || '',
+      albumImages: track.album.images,
     }));
-    
     res.json({ tracks });
   } catch (err) {
     console.error('Erro ao buscar tracks:', err);
@@ -152,315 +138,284 @@ app.post('/get-tracks', async (req, res) => {
   }
 });
 
-// ========== GERAR PLAYLIST INTELIGENTE ==========
 app.post('/analyze', async (req, res) => {
-  if (!spotifyApi.getAccessToken()) {
-    return res.status(401).json({ error: 'Usuário não autenticado.' });
-  }
-
-  const { trackIds } = req.body;
-  
-  if (!trackIds || trackIds.length === 0) {
-    return res.status(400).json({ error: 'Nenhuma música fornecida.' });
-  }
-
-  const lastfmApiKey = process.env.LASTFM_API_KEY;
-  if (!lastfmApiKey) {
-    return res.status(400).json({ error: 'LASTFM_API_KEY não configurado em .env' });
-  }
-
   try {
-    console.log(`\n========================================`);
-    console.log(`Analisando ${trackIds.length} músicas seed...`);
-    console.log('Track IDs:', trackIds);
+    await refreshTokenIfNeeded();
 
-    const accessToken = spotifyApi.getAccessToken();
-    console.log('\n🔑 Token Spotify (primeiros 20 chars):', accessToken.substring(0, 20) + '...');
+    if (!spotifyApi.getAccessToken()) {
+      return res.status(401).json({ error: 'Usuário não autenticado.' });
+    }
 
-    // 1. Buscar market e top artists do user pra bias relevância (market só pra user data)
-    const meData = await spotifyApi.getMe();
+    const { trackIds } = req.body;
+    if (!trackIds || trackIds.length === 0) {
+      return res.status(400).json({ error: 'Nenhuma música fornecida.' });
+    }
+
+    const lastfmApiKey = process.env.LASTFM_API_KEY;
+    if (!lastfmApiKey) {
+      return res.status(400).json({ error: 'LASTFM_API_KEY não configurado' });
+    }
+
+    const playlistSize = Math.min(50, 30 + (trackIds.length * 5));
+    const [meData, userTopData, seedTracksData] = await Promise.all([
+      spotifyApi.getMe(),
+      spotifyApi.getMyTopArtists({ time_range: 'medium_term', limit: 20 }),
+      spotifyApi.getTracks(trackIds)
+    ]);
+
     const userMarket = meData.body.country || 'US';
-    const userTopData = await spotifyApi.getMyTopArtists({ time_range: 'medium_term', limit: 20 });
     const userTops = userTopData.body.items;
-    const userAvgPop = userTops.reduce((sum, a) => sum + a.popularity, 0) / userTops.length;
+    const userAvgPop = userTops.reduce((sum, a) => sum + a.popularity, 0) / userTops.length || 50;
     const isUnderground = userAvgPop < 50;
-    const popBias = isUnderground ? 1.1 : 0.9;
-    console.log(`Market user: ${userMarket} | User avg pop: ${Math.round(userAvgPop)} | Bias: ${isUnderground ? 'underground' : 'mainstream'}`);
-
-    // 2. Buscar seeds e extrair artistas principais + FEATS
-    const seedLimit = Math.min(trackIds.length, 5);
-    const seedTracksData = await spotifyApi.getTracks(trackIds.slice(0, seedLimit));
+    const popBias = isUnderground ? 1.15 : 0.85;
+    
     const seedTracks = seedTracksData.body.tracks;
-
-    let allSeedArtists = new Map(); // id -> artistObj
+    
+    const seedsByArtist = new Map();
+    const artistCache = new Map();
+    
     seedTracks.forEach(track => {
-      track.artists.forEach(artist => {
-        if (!allSeedArtists.has(artist.id)) allSeedArtists.set(artist.id, artist);
-      });
+      const mainArtist = track.artists[0];
+      if (!seedsByArtist.has(mainArtist.id)) {
+        seedsByArtist.set(mainArtist.id, []);
+        artistCache.set(mainArtist.id, mainArtist);
+      }
+      seedsByArtist.get(mainArtist.id).push(track);
     });
-    const uniqueArtists = Array.from(allSeedArtists.values());
-    console.log(`Artistas únicos + feats (${uniqueArtists.length}):`, uniqueArtists.map(a => a.name).join(', '));
+    
+    const uniqueArtists = Array.from(artistCache.values());
 
-    // 3. Adicionar SEEDS à playlist (com 100%)
     let mergedPlaylist = seedTracks.map(track => ({
       id: track.id,
       name: track.name,
       artist: track.artists.map(a => a.name).join(', '),
-      cover: track.album.images[0]?.url || '',
+      albumImages: track.album.images,
       similarity: 100,
       uri: track.uri,
       type: 'seed',
-      source_artist: track.artists[0]?.name || 'Unknown'
+      source_artist: track.artists[0].name
     }));
-    const seedUris = seedTracks.map(t => t.uri);
-
-    // Coletar TODOS genres de todos artists (pra fallback global)
-    let allArtistGenres = [];
-    for (const artistObj of uniqueArtists) {
-      try {
-        const artistFull = await spotifyApi.getArtist(artistObj.id);
-        const genres = artistFull.body.genres || [];
-        allArtistGenres.push(...genres);
-        await new Promise(resolve => setTimeout(resolve, 100)); // Delay leve
-      } catch (err) {
-        console.warn(`Erro genres ${artistObj.name}:`, err.message);
-      }
-    }
-    allArtistGenres = [...new Set(allArtistGenres)].slice(0, 5); // Únicos, top 5
-    console.log(`Gêneros coletados de todos artists: ${allArtistGenres.join(', ')}`);
-
-    // 4. Por artista único: Sub-playlist (busca geral + filtro por nome artista)
-    let allSubTracks = [];
-    const seenArtists = new Set(uniqueArtists.map(a => a.name.toLowerCase()));
-
-    for (const artistObj of uniqueArtists) {
-      if (seenArtists.has(artistObj.name.toLowerCase())) continue;
-      seenArtists.add(artistObj.name.toLowerCase());
-      console.log(`\n--- Sub-playlist para ${artistObj.name} (pop: ${artistObj.popularity}) ---`);
-      
+    const seedUris = new Set(seedTracks.map(t => t.uri));
+    const remainingSlots = playlistSize - seedTracks.length;
+    
+    const processArtist = async (artistObj) => {
+      const artistSeeds = seedsByArtist.get(artistObj.id) || [];
+      const seedWeight = artistSeeds.length;
       let subTracks = [];
-      const seedArtistPop = artistObj.popularity;
       const artistNameLower = artistObj.name.toLowerCase();
-
-      // Prioridade 1: Busca geral por nome + filtro por artista exato
+      
       try {
-        const searchData = await spotifyApi.searchTracks(artistObj.name, { limit: 50, type: 'track' }); // q=name, global
-        const allItems = searchData.body.tracks.items;
-        console.log(`  Search "${artistObj.name}" global: returned ${allItems.length} total items`);
-        const artistTracks = allItems.filter(track => 
-          track.artists.some(a => a.name.toLowerCase() === artistNameLower)
-        ).slice(0, 25); // Filtro exato por nome artista
-        let addedCount = 0;
-        artistTracks.forEach(track => {
-          if (!seedUris.includes(track.uri)) {
-            const sim = 95 + Math.random() * 5;
-            subTracks.push({
-              ...track,
-              similarity: Math.round(sim),
-              type: 'same_or_feat',
-              source_artist: artistObj.name,
-              weight: sim,
-              pop_range_match: 1
-            });
-            addedCount++;
-          }
-        });
-        console.log(`  ✓ Added ${addedCount} tracks same/feat (filtered from ${artistTracks.length})`);
-        await new Promise(resolve => setTimeout(resolve, 200));
-      } catch (err) {
-        console.warn(`Erro search tracks ${artistObj.name}:`, err.message);
-      }
-
-      // Prioridade 2: Similars via Last.fm (threshold muito baixo, filtro pós-busca)
-      try {
-        const lastfmUrl = `http://ws.audioscrobbler.com/2.0/?method=artist.getsimilar&artist=${encodeURIComponent(artistObj.name)}&api_key=${lastfmApiKey}&format=json&limit=30`;
-        const lastfmRes = await fetch(lastfmUrl);
-        console.log(`  Last.fm fetch for ${artistObj.name}: status ${lastfmRes.status}`);
-        if (!lastfmRes.ok) throw new Error(`Last.fm HTTP ${lastfmRes.status}`);
-        const lastfmData = await lastfmRes.json();
-        const similars = lastfmData.similarartists?.artist || [];
-        console.log(`  Last.fm returned ${similars.length} similars`);
-        const goodSimilars = similars
-          .filter(s => parseFloat(s.match) > 0.05)
-          .filter(s => {
-            const estPop = Math.round(seedArtistPop * (0.6 + parseFloat(s.match)));
-            const popMatch = Math.abs(estPop - seedArtistPop) / 100 < 0.4;
-            return popMatch && (!isUnderground || estPop < 75);
-          })
+        const searchData = await spotifyApi.searchTracks(`artist:"${artistObj.name}"`, { limit: 30, market: userMarket });
+        const artistTracks = searchData.body.tracks.items
+          .filter(track => 
+            track.artists.some(a => a.name.toLowerCase() === artistNameLower) &&
+            !seedUris.has(track.uri)
+          )
           .slice(0, 15);
         
-        console.log(`  Good similars (match>0.05, pop ±40%): ${goodSimilars.length}`);
-        if (goodSimilars.length > 0) console.log(`  Ex: ${goodSimilars.slice(0,3).map(s => `${s.name} (${(s.match*100).toFixed(1)}%)`).join(', ')}`);
-
-        let similarAdded = 0;
-        for (const sim of goodSimilars) {
+        artistTracks.forEach(track => {
+          subTracks.push({
+            ...track, similarity: 95 + Math.random() * 5, type: 'same_artist',
+            weight: 100 * seedWeight, source_artist: artistObj.name
+          });
+        });
+        
+        const relatedArtistsData = await spotifyApi.getArtistRelatedArtists(artistObj.id);
+        const goodRelated = relatedArtistsData.body.artists
+          .filter(a => Math.abs(a.popularity - artistObj.popularity) < 40)
+          .slice(0, 5);
+          
+        const relatedPromises = goodRelated.map(async (relArtist) => {
           try {
-            const spotifySearch = await spotifyApi.searchArtists(sim.name, { limit: 1 });
-            const simSpotify = spotifySearch.body.artists.items[0];
-            if (simSpotify && simSpotify.popularity > 2) {
-              const simSearchData = await spotifyApi.searchTracks(simSpotify.name, { limit: 30, type: 'track' }); // q=name similar
-              const allSimItems = simSearchData.body.tracks.items;
-              const simArtistNameLower = simSpotify.name.toLowerCase();
-              const simTracks = allSimItems.filter(track => 
-                track.artists.some(a => a.name.toLowerCase() === simArtistNameLower)
-              ).slice(0, 12); // Filtro exato
-              let simAdded = 0;
-              simTracks.forEach(track => {
-                if (!seedUris.includes(track.uri) && subTracks.length < 40) {
-                  const match = parseFloat(sim.match);
-                  const popSim = Math.abs(simSpotify.popularity - seedArtistPop) / 100;
-                  const simWeight = (match * (1 - popSim) * 100 * popBias) * 1.25;
-                  subTracks.push({
-                    ...track,
-                    similarity: Math.min(95, Math.max(55, Math.round(simWeight))),
-                    type: 'similar',
-                    source_artist: artistObj.name,
-                    weight: simWeight,
-                    match_lastfm: match,
-                    pop_range_match: 1 - popSim
-                  });
-                  simAdded++;
-                }
-              });
-              similarAdded += simAdded;
-              console.log(`    Added ${simAdded} from ${sim.name} (filtered from ${simTracks.length})`);
-            }
-            await new Promise(resolve => setTimeout(resolve, 200));
-          } catch (err) {
-            console.warn(`    Erro similar ${sim.name}:`, err.message);
-          }
-        }
-        console.log(`  Total similar added: ${similarAdded}`);
-      } catch (err) {
-        console.warn(`Erro Last.fm para ${artistObj.name}:`, err.message);
-      }
-
-      // Adicionar subTracks (overlap <0.9)
-      const overlap = allSubTracks.filter(t => subTracks.some(s => s.uri === t.uri)).length / subTracks.length || 0;
-      const addCount = overlap < 0.9 ? subTracks.length : Math.floor(subTracks.length * 0.7);
-      allSubTracks.push(...subTracks.slice(0, addCount));
-      console.log(`  Added to allSub: ${addCount} tracks (overlap ${Math.round(overlap*100)}%)`);
-
-      await new Promise(resolve => setTimeout(resolve, 200));
-    }
-
-    // Fallback global: Se <15 total, busca OR name + genres, filtro por similaridade (não exato)
-    if (allSubTracks.length < 15) {
-      console.log('  🔄 Fallback global: OR names + genres pra boost');
-      let fallbackQuery = uniqueArtists.map(a => a.name).join(' OR ');
-      if (allArtistGenres.length > 0) {
-        fallbackQuery += ` OR ${allArtistGenres.join(' OR ')}`;
-      }
-      try {
-        const broadSearch = await spotifyApi.searchTracks(fallbackQuery, { limit: 50, type: 'track' });
-        const broadItems = broadSearch.body.tracks.items.length;
-        console.log(`  Fallback query "${fallbackQuery}": returned ${broadItems} items`);
-        // Filtro loose: tracks com artista similar ou genre match (não exato)
-        broadSearch.body.tracks.items.slice(0, 25).forEach(track => {
-          const hasRelatedArtist = track.artists.some(a => uniqueArtists.some(ua => a.name.toLowerCase().includes(ua.name.toLowerCase().slice(0,5)))); // Loose match
-          if (hasRelatedArtist && !seedUris.includes(track.uri) && allSubTracks.length < 50) {
-            allSubTracks.push({
-              ...track,
-              similarity: 70 + Math.random() * 20,
-              type: 'fallback',
-              source_artist: 'Global fallback',
-              weight: 80
+            const recommendations = await spotifyApi.getRecommendations({
+                seed_artists: [relArtist.id],
+                limit: 3
             });
-          }
+            const popSimilarity = 1 - (Math.abs(relArtist.popularity - artistObj.popularity) / 100);
+            return recommendations.body.tracks
+              .filter(track => !seedUris.has(track.uri))
+              .map(track => ({
+                ...track, 
+                similarity: Math.round(80 + (popSimilarity * 15)),
+                type: 'fans_also_like',
+                weight: 90 * seedWeight * popSimilarity, 
+                source_artist: artistObj.name
+              }));
+          } catch { return []; }
         });
-        console.log(`  Fallback added ${allSubTracks.length - (allSubTracks.length - 25)} tracks (loose filter)`);
+        
+        const relatedResults = await Promise.all(relatedPromises);
+        const relatedTracks = relatedResults.flat();
+        subTracks.push(...relatedTracks);
+
+        const lastfmPromise = fetch(
+          `http://ws.audioscrobbler.com/2.0/?method=artist.getsimilar&artist=${encodeURIComponent(artistObj.name)}&api_key=${lastfmApiKey}&format=json&limit=10`,
+          { signal: AbortSignal.timeout(3000) }
+        ).then(res => res.ok ? res.json() : null).catch(() => null);
+        
+        const lastfmData = await lastfmPromise;
+        const goodSimilars = (lastfmData?.similarartists?.artist || []).filter(s => parseFloat(s.match) > 0.15).slice(0, 5);
+        
+        const similarPromises = goodSimilars.map(async (sim) => {
+            try {
+                const spotifySearch = await spotifyApi.searchArtists(sim.name, { limit: 1 });
+                const simSpotify = spotifySearch.body.artists.items[0];
+                if (!simSpotify || Math.abs(simSpotify.popularity - artistObj.popularity) > 40) return [];
+                
+                const simTracks = await spotifyApi.getArtistTopTracks(simSpotify.id, userMarket);
+                const match = parseFloat(sim.match);
+                const popSimilarity = 1 - (Math.abs(simSpotify.popularity - artistObj.popularity) / 100);
+
+                return simTracks.body.tracks
+                  .filter(track => !seedUris.has(track.uri)).slice(0, 3)
+                  .map(track => ({
+                    ...track, similarity: Math.round(match * popSimilarity * 90 * popBias), type: 'similar',
+                    weight: match * popSimilarity * 100 * seedWeight, source_artist: artistObj.name
+                  }));
+            } catch { return []; }
+        });
+        
+        const similarResults = await Promise.all(similarPromises);
+        const similarTracks = similarResults.flat();
+        subTracks.push(...similarTracks);
+        
       } catch (err) {
-        console.warn('Fallback error:', err.message);
+        console.warn(`Erro ao processar ${artistObj.name}: ${err.message}`);
+      }
+      return subTracks;
+    };
+
+    const allSubTracks = (await Promise.all(uniqueArtists.map(processArtist))).flat();
+    
+    const uriSeen = new Set(seedUris);
+    const finalSelection = [];
+
+    const candidatesByType = { same_artist: [], fans_also_like: [], similar: [] };
+    allSubTracks.forEach(track => {
+      if (candidatesByType[track.type]) {
+        candidatesByType[track.type].push(track);
+      }
+    });
+
+    for (const type in candidatesByType) {
+      candidatesByType[type].sort((a, b) => b.weight - a.weight);
+    }
+
+    const quota = {
+      fans_also_like: Math.ceil(remainingSlots * 0.40),
+      similar: Math.ceil(remainingSlots * 0.30),
+      same_artist: Math.ceil(remainingSlots * 0.30)
+    };
+
+    const typesInOrder = ['fans_also_like', 'similar', 'same_artist'];
+    for (const type of typesInOrder) {
+      const amountToTake = quota[type];
+      const candidates = candidatesByType[type];
+      let taken = 0;
+      
+      for (const track of candidates) {
+        if (taken >= amountToTake) break;
+        if (!uriSeen.has(track.uri)) {
+          uriSeen.add(track.uri);
+          finalSelection.push(track);
+          taken++;
+        }
+      }
+    }
+    
+    if (finalSelection.length < remainingSlots) {
+      const allRemainingCandidates = typesInOrder.flatMap(type => candidatesByType[type])
+        .sort((a, b) => b.weight - a.weight);
+
+      for (const track of allRemainingCandidates) {
+        if (finalSelection.length >= remainingSlots) break;
+        if (!uriSeen.has(track.uri)) {
+          uriSeen.add(track.uri);
+          finalSelection.push(track);
+        }
       }
     }
 
-    // 5. Mesclar: Dedup, sort, limite 30
-    const uriSeen = new Set(seedUris);
-    allSubTracks.forEach(track => {
-      if (!uriSeen.has(track.uri) && mergedPlaylist.length < 30) {
-        uriSeen.add(track.uri);
-        mergedPlaylist.push({
-          id: track.id,
-          name: track.name,
-          artist: track.artists.map(a => a.name).join(', '),
-          cover: track.album.images[0]?.url || '',
-          similarity: track.similarity,
-          uri: track.uri,
-          type: track.type,
-          source_artist: track.source_artist
-        });
-      }
+    finalSelection.forEach(track => {
+      mergedPlaylist.push({
+        id: track.id,
+        name: track.name,
+        artist: track.artists.map(a => a.name).join(', '),
+        albumImages: track.album.images,
+        similarity: track.similarity,
+        uri: track.uri,
+        type: track.type,
+        source_artist: track.source_artist
+      });
     });
-
+    
     mergedPlaylist.sort((a, b) => {
-      if (b.similarity !== a.similarity) return b.similarity - a.similarity;
-      return Math.random() - 0.5;
+      if (a.type === 'seed') return -1;
+      if (b.type === 'seed') return 1;
+      return b.similarity - a.similarity;
     });
 
-    console.log(`\n✅ Playlist: ${mergedPlaylist.length} músicas (seeds: ${seedTracks.length})`);
-    console.log(`Distrib: Seed ${mergedPlaylist.filter(p => p.type === 'seed').length}, Same/Feat ${mergedPlaylist.filter(p => p.type === 'same_or_feat').length}, Similar ${mergedPlaylist.filter(p => p.type === 'similar').length}, Fallback ${mergedPlaylist.filter(p => p.type === 'fallback').length}`);
-    console.log(`Média sim: ${Math.round(mergedPlaylist.reduce((sum, t) => sum + t.similarity, 0) / mergedPlaylist.length || 0)}% | Underground bias: ${isUnderground}`);
-    console.log(`========================================\n`);
+    if (mergedPlaylist.length > playlistSize) {
+        mergedPlaylist = mergedPlaylist.slice(0, playlistSize);
+    }
 
+    const stats = {
+      total: mergedPlaylist.length,
+      seeds: mergedPlaylist.filter(p => p.type === 'seed').length,
+      same_artist: mergedPlaylist.filter(p => p.type === 'same_artist').length,
+      fans_also_like: mergedPlaylist.filter(p => p.type === 'fans_also_like').length,
+      similar: mergedPlaylist.filter(p => p.type === 'similar').length,
+      avgSimilarity: Math.round(mergedPlaylist.reduce((sum, t) => sum + t.similarity, 0) / mergedPlaylist.length)
+    };
+    
+    const bySource = new Map();
+    mergedPlaylist.forEach(track => {
+      const source = track.source_artist || 'Unknown';
+      bySource.set(source, (bySource.get(source) || 0) + 1);
+    });
+    
     res.json({
       similarities: mergedPlaylist,
-      avgFeatures: null,
-      method: 'filtered-search-boosted',
-      userBias: isUnderground ? 'underground' : 'mainstream',
-      totalArtists: uniqueArtists.length
+      method: 'quota-based-v4.2-recs',
+      stats: { ...stats, distributionBySourceArtist: Object.fromEntries(bySource) }
     });
 
   } catch (err) {
-    console.error('\n❌ ERRO NA ANÁLISE:', err.message);
-    console.error('Stack:', err.stack);
-    console.error('========================================\n');
+    console.error('\n❌ ERRO:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ========== EXPORTAR PLAYLIST PARA SPOTIFY ==========
 app.post('/export-playlist', async (req, res) => {
-  if (!spotifyApi.getAccessToken()) {
-    return res.status(401).json({ error: 'Usuário não autenticado.' });
-  }
-
-  const { playlistName, trackUris } = req.body;
-
-  if (!playlistName || !trackUris || trackUris.length === 0) {
-    return res.status(400).json({ error: 'Nome e músicas são obrigatórios.' });
-  }
-
   try {
-    // 1. Pegar ID do usuário
+    await refreshTokenIfNeeded();
+    const { playlistName, trackUris } = req.body;
+
+    if (!playlistName || !trackUris || trackUris.length === 0) {
+      return res.status(400).json({ error: 'Nome e músicas são obrigatórios.' });
+    }
+
     const meData = await spotifyApi.getMe();
     const userId = meData.body.id;
 
-    // 2. Criar playlist no Spotify
     const playlistData = await spotifyApi.createPlaylist(userId, playlistName, {
       description: 'Playlist gerada pelo Playlist Maker - Frequency Mixer',
       public: false,
     });
-
     const playlistId = playlistData.body.id;
-
-    // 3. Adicionar músicas à playlist
     await spotifyApi.addTracksToPlaylist(playlistId, trackUris);
-
-    console.log(`Playlist "${playlistName}" criada com sucesso!`);
 
     res.json({
       success: true,
       playlistId: playlistId,
       playlistUrl: playlistData.body.external_urls.spotify,
     });
-
   } catch (err) {
     console.error('Erro ao exportar playlist:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ========== INICIAR SERVIDOR ==========
 app.listen(port, () => {
   console.log(` Backend rodando em http://127.0.0.1:${port}`);
 });
