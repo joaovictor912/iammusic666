@@ -2,7 +2,6 @@
 // ARQUIVO COMPLETO E CORRIGIDO: src/App.js
 // ============================================
 
-// CORREÇÃO: Adicionados 'useState', 'useEffect' e 'useRef' na linha de importação.
 import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 
@@ -41,10 +40,27 @@ const Home = () => {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    if (params.get('authorized') === 'true') {
+    const accessToken = params.get('access_token');
+    const refreshToken = params.get('refresh_token');
+    const expiresIn = params.get('expires_in');
+
+    if (accessToken) {
+      localStorage.setItem('spotify_access_token', accessToken);
+      if (refreshToken) localStorage.setItem('spotify_refresh_token', refreshToken);
+      if (expiresIn) {
+        const expiresAt = Date.now() + parseInt(expiresIn, 10) * 1000;
+        localStorage.setItem('spotify_token_expires_at', String(expiresAt));
+      }
       setAuthorized(true);
       window.history.replaceState({}, '', '/');
+    } else {
+      const existingToken = localStorage.getItem('spotify_access_token');
+      const expiresAt = localStorage.getItem('spotify_token_expires_at');
+      if (existingToken && expiresAt && Date.now() < parseInt(expiresAt, 10)) {
+        setAuthorized(true);
+      }
     }
+
     if (params.get('error')) {
       alert('Erro na autenticação: ' + params.get('error'));
       window.history.replaceState({}, '', '/');
@@ -53,6 +69,43 @@ const Home = () => {
 
   const handleSpotifySetup = () => {
     window.location.href = 'http://127.0.0.1:5000/auth';
+  };
+
+  // Função "guardiã" que verifica e renova o token antes de usá-lo
+  const getValidToken = async () => {
+    let token = localStorage.getItem('spotify_access_token');
+    const expiresAt = parseInt(localStorage.getItem('spotify_token_expires_at') || '0', 10);
+
+    if (Date.now() > expiresAt - 60000) {
+      console.log("Token expirado ou prestes a expirar, renovando...");
+      const refreshToken = localStorage.getItem('spotify_refresh_token');
+
+      try {
+        const res = await fetch('http://127.0.0.1:5000/refresh_token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken }),
+        });
+
+        const data = await res.json();
+        if (data.accessToken) {
+          token = data.accessToken;
+          const newExpiresAt = Date.now() + data.expiresIn * 1000;
+          
+          localStorage.setItem('spotify_access_token', token);
+          localStorage.setItem('spotify_token_expires_at', String(newExpiresAt));
+          console.log("Token renovado e salvo no localStorage!");
+        } else {
+          throw new Error('Não foi possível renovar o token.');
+        }
+      } catch (error) {
+        console.error("Falha na renovação do token:", error);
+        localStorage.clear();
+        setAuthorized(false);
+        return null;
+      }
+    }
+    return token;
   };
 
   const handleInputChange = (e) => {
@@ -66,9 +119,16 @@ const Home = () => {
     if (value.trim().length > 2) {
       searchTimeoutRef.current = setTimeout(async () => {
         try {
+          // CORREÇÃO: Usar a função guardiã para garantir um token válido
+          const token = await getValidToken();
+          if (!token) return;
+
           const res = await fetch('http://127.0.0.1:5000/search-suggestions', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
             body: JSON.stringify({ query: value }),
           });
           
@@ -86,22 +146,19 @@ const Home = () => {
   };
 
   const addTrackFromData = (trackData) => {
-  if (!seedTracks.some(track => track.id === trackData.id)) {
-    setSeedTracks([...seedTracks, trackData]); 
-    
-    setInputValue('');
-    setSuggestions([]);
-    setShowSuggestions(false);
-    setCoverArtUrl(trackData.albumImages[0]?.url || ''); 
-    
-    setTrackName(trackData.name);
-    setArtistName(trackData.artist);
-    setPreviewUrl(trackData.previewUrl);
-
-  } else {
-    alert('Esta música já foi adicionada.');
-  }
-};
+    if (!seedTracks.some(track => track.id === trackData.id)) {
+      setSeedTracks([...seedTracks, trackData]); 
+      setInputValue('');
+      setSuggestions([]);
+      setShowSuggestions(false);
+      setCoverArtUrl(trackData.albumImages[0]?.url || ''); 
+      setTrackName(trackData.name);
+      setArtistName(trackData.artist);
+      setPreviewUrl(trackData.previewUrl);
+    } else {
+      alert('Esta música já foi adicionada.');
+    }
+  };
 
   const addTrackId = async () => {
     const query = inputValue.trim();
@@ -109,9 +166,16 @@ const Home = () => {
     setLoading(true);
 
     try {
+      // CORREÇÃO: Usar a função guardiã para garantir um token válido
+      const token = await getValidToken();
+      if (!token) return;
+
       const res = await fetch('http://127.0.0.1:5000/search', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({ query }),
       });
       
@@ -146,7 +210,6 @@ const Home = () => {
 
   const handleAnalyze = async () => {
     const trackIds = seedTracks.map(track => track.id);
-
     if (trackIds.length === 0) {
       alert('Adicione pelo menos uma música para gerar a playlist.');
       return;
@@ -154,9 +217,16 @@ const Home = () => {
     setLoading(true);
 
     try {
+      // CORREÇÃO: Usar a função guardiã para garantir um token válido
+      const token = await getValidToken();
+      if (!token) return;
+
       const res = await fetch('http://127.0.0.1:5000/analyze', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({ trackIds }),
       });
       
@@ -175,18 +245,23 @@ const Home = () => {
       alert('Nenhuma playlist para exportar.');
       return;
     }
-
     const playlistName = prompt('Nome da playlist:', 'My Mixed Playlist');
     if (!playlistName) return;
-
     setExporting(true);
 
     try {
       const trackUris = playlist.map(track => track.uri);
       
+      // CORREÇÃO: Usar a função guardiã para garantir um token válido
+      const token = await getValidToken();
+      if (!token) return;
+      
       const res = await fetch('http://127.0.0.1:5000/export-playlist', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({ 
           playlistName, 
           trackUris 
@@ -211,34 +286,32 @@ const Home = () => {
   return (
     <div style={styles.fullscreenUi}>
       <header style={styles.ipodHeader}>
-  <div style={styles.headerTitle}>
-    {authorized ? 'Now Playing' : 'PLAYLIST MAKER'}
-  </div>
-  
-  {authorized && (
-    // A correção está neste 'div' abaixo. Ele é o container de tudo.
-    <div style={{
-      ...styles.volumeControlContainer,
-      // A lógica que desabilita o controle é aplicada aqui
-      ...(!previewUrl ? styles.volumeControlDisabled : {})
-    }}>
-      <svg style={styles.volumeIcon} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-        <path d="M5 17h-5v-10h5v10zm2-10v10l9 5v-20l-9 5zm11.008 2.093c.742.743 1.2 1.77 1.192 2.907-.008 1.137-.458 2.164-1.2 2.907l-1.414-1.414c.389-.39.624-.928.622-1.493-.002-.565-.24-1.102-.622-1.493l1.414-1.414zm3.555-3.556c1.488 1.488 2.404 3.518 2.402 5.663-.002 2.145-.92 4.175-2.402 5.663l-1.414-1.414c1.118-1.117 1.802-2.677 1.8-4.249-.002-1.572-.69-3.132-1.8-4.249l1.414-1.414z"/>
-      </svg>
-      <input 
-        type="range" 
-        min="0" 
-        max="1" 
-        step="0.01" 
-        value={volume}
-        onChange={e => setVolume(parseFloat(e.target.value))}
-        style={styles.volumeSlider}
-      />
-    </div>
-  )}
-  
-  <span style={styles.batteryIcon}>▮▮▮▯</span>
-</header>
+        <div style={styles.headerTitle}>
+          {authorized ? 'Now Playing' : 'PLAYLIST MAKER'}
+        </div>
+        
+        {authorized && (
+          <div style={{
+            ...styles.volumeControlContainer,
+            ...(!previewUrl ? styles.volumeControlDisabled : {})
+          }}>
+            <svg style={styles.volumeIcon} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+              <path d="M5 17h-5v-10h5v10zm2-10v10l9 5v-20l-9 5zm11.008 2.093c.742.743 1.2 1.77 1.192 2.907-.008 1.137-.458 2.164-1.2 2.907l-1.414-1.414c.389-.39.624-.928.622-1.493-.002-.565-.24-1.102-.622-1.493l1.414-1.414zm3.555-3.556c1.488 1.488 2.404 3.518 2.402 5.663-.002 2.145-.92 4.175-2.402 5.663l-1.414-1.414c1.118-1.117 1.802-2.677 1.8-4.249-.002-1.572-.69-3.132-1.8-4.249l1.414-1.414z"/>
+            </svg>
+            <input 
+              type="range" 
+              min="0" 
+              max="1" 
+              step="0.01" 
+              value={volume}
+              onChange={e => setVolume(parseFloat(e.target.value))}
+              style={styles.volumeSlider}
+            />
+          </div>
+        )}
+        
+        <span style={styles.batteryIcon}>▮▮▮▯</span>
+      </header>
       
       <main style={styles.ipodBody}>
         <div style={styles.artworkPanel}>
@@ -373,7 +446,7 @@ const Home = () => {
                       {seedTracks.map((track, index) => (
                         <li key={index} style={styles.seedListItem}>
                           <img 
-                            src={track.albumImages[2]?.url || track.albumImages[0]?.url || ''} // Usa a imagem pequena
+                            src={track.albumImages[2]?.url || track.albumImages[0]?.url || ''}
                             alt={track.name} 
                             style={styles.seedCover}
                           />
@@ -447,9 +520,7 @@ const Home = () => {
   );
 };
 
-// ... (Copie o seu objeto 'styles' inteiro aqui)
 const styles = {
-  // ... todas as suas definições de estilo
   fullscreenUi: {
     display: 'flex',
     flexDirection: 'column',
@@ -851,14 +922,11 @@ const styles = {
     borderRadius: '12px',
     fontSize: '12px',
     fontWeight: '600',
-  
   },
-
   volumeControlDisabled: {
-  opacity: 0.4,
-  pointerEvents: 'none',
-},
-
+    opacity: 0.4,
+    pointerEvents: 'none',
+  },
 };
 
 function App() {
