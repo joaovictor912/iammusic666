@@ -5,6 +5,7 @@ import numpy as np
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
 def main():
+    print("--- 🐍 PYTHON: O script embedder.py foi ativado e está processando... ---", file=sys.stderr)
     data = json.load(sys.stdin)
     texts = data.get("texts", [])
     if not isinstance(texts, list): texts = []

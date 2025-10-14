@@ -1,7 +1,3 @@
-// ============================================
-// ARQUIVO COMPLETO E CORRIGIDO: src/App.js
-// ============================================
-
 import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 
