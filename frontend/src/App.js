@@ -529,7 +529,7 @@ const Home = () => {
     <div style={styles.fullscreenUi}>
       <header style={styles.ipodHeader}>
         <div style={styles.headerTitle}>
-          {authorized ? 'Now Playing' : 'PLAYLIST MAKER'}
+          {authorized ? 'Now Playing' : 'ETHEREAL.COM'}
         </div>
         
         {authorized && (
