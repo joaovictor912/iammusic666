@@ -57,6 +57,20 @@ const Home = () => {
   const [artistName, setArtistName] = useState('');
   const [previewUrl, setPreviewUrl] = useState(null);
   const [exporting, setExporting] = useState(false);
+  
+  // Novos estados para funcionalidades avançadas
+  const [playlistAnalysis, setPlaylistAnalysis] = useState(null);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [trackRatings, setTrackRatings] = useState({});
+  const [overallRating, setOverallRating] = useState(0);
+  const [feedbackStats, setFeedbackStats] = useState(null);
+  const [showQualityMetrics, setShowQualityMetrics] = useState(false);
+  
+  // Estados para gerenciar playlists salvas
+  const [savedPlaylists, setSavedPlaylists] = useState([]);
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [playlistName, setPlaylistName] = useState('');
+  const [showSavedPlaylists, setShowSavedPlaylists] = useState(false);
 
   const audioRef = useRef(new Audio());
   const [volume, setVolume] = useState(0.5);
@@ -75,6 +89,107 @@ const Home = () => {
   useEffect(() => {
     audioRef.current.volume = volume;
   }, [volume]);
+
+  // Carregar estatísticas de feedback ao inicializar
+  useEffect(() => {
+    if (authorized) {
+      fetchFeedbackStats();
+      loadSavedPlaylists();
+    }
+  }, [authorized]);
+
+  // Funções para gerenciar playlists salvas
+  const loadSavedPlaylists = () => {
+    try {
+      const saved = localStorage.getItem('savedPlaylists');
+      if (saved) {
+        setSavedPlaylists(JSON.parse(saved));
+      }
+    } catch (err) {
+      console.error('Erro ao carregar playlists salvas:', err);
+    }
+  };
+
+  const savePlaylist = () => {
+    if (!playlistName.trim()) {
+      alert('Por favor, digite um nome para a playlist.');
+      return;
+    }
+
+    const playlistData = {
+      id: `playlist_${Date.now()}`,
+      name: playlistName.trim(),
+      tracks: playlist,
+      analysis: playlistAnalysis,
+      seedTracks: seedTracks,
+      createdAt: new Date().toISOString(),
+      trackRatings: trackRatings,
+      overallRating: overallRating
+    };
+
+    const updatedPlaylists = [...savedPlaylists, playlistData];
+    setSavedPlaylists(updatedPlaylists);
+    
+    try {
+      localStorage.setItem('savedPlaylists', JSON.stringify(updatedPlaylists));
+      alert(`Playlist "${playlistName}" salva com sucesso!`);
+      setShowSaveModal(false);
+      setPlaylistName('');
+    } catch (err) {
+      console.error('Erro ao salvar playlist:', err);
+      alert('Erro ao salvar playlist. Tente novamente.');
+    }
+  };
+
+  const loadPlaylist = (playlistData) => {
+    setPlaylist(playlistData.tracks);
+    setPlaylistAnalysis(playlistData.analysis);
+    setSeedTracks(playlistData.seedTracks);
+    setTrackRatings(playlistData.trackRatings || {});
+    setOverallRating(playlistData.overallRating || 0);
+    setShowSavedPlaylists(false);
+    
+    // Atualizar cover art com a primeira música
+    if (playlistData.tracks.length > 0) {
+      const firstTrack = playlistData.tracks[0];
+      setCoverArtUrl(firstTrack.albumImages?.[0]?.url || '');
+      setTrackName(firstTrack.name);
+      setArtistName(firstTrack.artist);
+    }
+  };
+
+  const deletePlaylist = (playlistId) => {
+    const playlistToDelete = savedPlaylists.find(p => p.id === playlistId);
+    if (playlistToDelete && window.confirm(`Tem certeza que deseja excluir a playlist "${playlistToDelete.name}"?`)) {
+      const updatedPlaylists = savedPlaylists.filter(p => p.id !== playlistId);
+      setSavedPlaylists(updatedPlaylists);
+      
+      try {
+        localStorage.setItem('savedPlaylists', JSON.stringify(updatedPlaylists));
+        alert('Playlist excluída com sucesso!');
+      } catch (err) {
+        console.error('Erro ao excluir playlist:', err);
+        alert('Erro ao excluir playlist. Tente novamente.');
+      }
+    }
+  };
+
+  const resetPlaylist = () => {
+    if (window.confirm('Tem certeza que deseja reiniciar? Isso irá limpar a playlist atual e as músicas seed.')) {
+      setPlaylist([]);
+      setPlaylistAnalysis(null);
+      setSeedTracks([]);
+      setTrackRatings({});
+      setOverallRating(0);
+      setCoverArtUrl('');
+      setTrackName('');
+      setArtistName('');
+      setPreviewUrl(null);
+      setShowQualityMetrics(false);
+      setShowFeedbackModal(false);
+      alert('Playlist reiniciada! Você pode começar uma nova.');
+    }
+  };
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -270,12 +385,101 @@ const Home = () => {
       
       const data = await res.json();
       if (data.error) throw new Error(data.error);
+      
       setPlaylist(data.similarities || []);
+      setPlaylistAnalysis(data); // Salvar análise completa
+      
+      // Resetar ratings para nova playlist
+      setTrackRatings({});
+      setOverallRating(0);
     } catch (err) {
       alert('Erro na análise: ' + err.message);
     }
     
     setLoading(false);
+  };
+
+  // Função para enviar feedback
+  const handleSubmitFeedback = async () => {
+    if (Object.keys(trackRatings).length === 0 || overallRating === 0) {
+      alert('Por favor, avalie pelo menos uma música e dê uma nota geral.');
+      return;
+    }
+
+    try {
+      const token = await getValidToken();
+      if (!token) return;
+
+      const res = await fetch('http://127.0.0.1:5000/playlist-feedback', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          playlistId: `playlist_${Date.now()}`,
+          trackRatings,
+          overallRating,
+          playlistContext: playlistAnalysis?.culturalContext || {}
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success) {
+        alert('Feedback enviado com sucesso! Obrigado por ajudar a melhorar o sistema.');
+        setShowFeedbackModal(false);
+        setTrackRatings({});
+        setOverallRating(0);
+        // Atualizar estatísticas
+        await fetchFeedbackStats();
+      } else {
+        throw new Error(data.error);
+      }
+    } catch (err) {
+      alert('Erro ao enviar feedback: ' + err.message);
+    }
+  };
+
+  // Função para buscar estatísticas de feedback
+  const fetchFeedbackStats = async () => {
+    try {
+      const res = await fetch('http://127.0.0.1:5000/feedback-stats');
+      const data = await res.json();
+      setFeedbackStats(data);
+    } catch (err) {
+      console.error('Erro ao buscar estatísticas:', err);
+    }
+  };
+
+  // Função para avaliar uma música individual
+  const rateTrack = (trackId, rating) => {
+    setTrackRatings(prev => ({
+      ...prev,
+      [trackId]: rating
+    }));
+  };
+
+  // Função para renderizar estrelas de rating
+  const renderStars = (rating, onRatingChange, size = 'medium') => {
+    const starSize = size === 'small' ? '12px' : '16px';
+    return (
+      <div style={{ display: 'flex', gap: '2px' }}>
+        {[1, 2, 3, 4, 5].map(star => (
+          <span
+            key={star}
+            onClick={() => onRatingChange(star)}
+            style={{
+              cursor: 'pointer',
+              fontSize: starSize,
+              color: star <= rating ? '#ffd700' : '#ddd',
+              transition: 'color 0.2s'
+            }}
+          >
+            ★
+          </span>
+        ))}
+      </div>
+    );
   };
 
   const handleExportToSpotify = async () => {
@@ -468,7 +672,65 @@ const Home = () => {
                   >
                     {loading ? 'Mixing...' : 'Mix Playlist'}
                   </button>
+                  <button 
+                    onClick={resetPlaylist}
+                    style={{
+                      ...styles.ipodButton,
+                      ...styles.resetButton,
+                      ...(playlist.length === 0 && seedTracks.length === 0 ? styles.buttonDisabled : {})
+                    }}
+                    disabled={playlist.length === 0 && seedTracks.length === 0}
+                  >
+                    Reset
+                  </button>
                 </div>
+                
+                {/* Botão para ver playlists salvas */}
+                {savedPlaylists.length > 0 && (
+                  <div style={styles.savedPlaylistsSection}>
+                    <button 
+                      onClick={() => setShowSavedPlaylists(!showSavedPlaylists)}
+                      style={{
+                        ...styles.ipodButton,
+                        ...styles.savedPlaylistsButton
+                      }}
+                    >
+                      {showSavedPlaylists ? 'Hide Saved' : `Saved Playlists (${savedPlaylists.length})`}
+                    </button>
+                    
+                    {showSavedPlaylists && (
+                      <div style={styles.savedPlaylistsContainer}>
+                        <h3 style={styles.savedPlaylistsTitle}>Playlists Salvas</h3>
+                        <div style={styles.savedPlaylistsList}>
+                          {savedPlaylists.map((savedPlaylist) => (
+                            <div key={savedPlaylist.id} style={styles.savedPlaylistItem}>
+                              <div style={styles.savedPlaylistInfo}>
+                                <div style={styles.savedPlaylistName}>{savedPlaylist.name}</div>
+                                <div style={styles.savedPlaylistMeta}>
+                                  {savedPlaylist.tracks.length} tracks • {new Date(savedPlaylist.createdAt).toLocaleDateString()}
+                                </div>
+                              </div>
+                              <div style={styles.savedPlaylistActions}>
+                                <button 
+                                  onClick={() => loadPlaylist(savedPlaylist)}
+                                  style={styles.loadButton}
+                                >
+                                  Load
+                                </button>
+                                <button 
+                                  onClick={() => deletePlaylist(savedPlaylist.id)}
+                                  style={styles.deleteButton}
+                                >
+                                  Delete
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
               
               {seedTracks.length > 0 && (
@@ -524,17 +786,121 @@ const Home = () => {
                     <div style={styles.playlistHeader}>
                       Generated Playlist ({playlist.length} tracks)
                     </div>
-                    <button 
-                      onClick={handleExportToSpotify} 
-                      style={{
-                        ...styles.ipodButton,
-                        ...styles.exportButton
-                      }}
-                      disabled={exporting}
-                    >
-                      {exporting ? 'Exporting...' : 'Export to Spotify'}
-                    </button>
+                    <div style={styles.playlistActions}>
+                      <button 
+                        onClick={() => setShowQualityMetrics(!showQualityMetrics)}
+                        style={{
+                          ...styles.ipodButton,
+                          ...styles.qualityButton
+                        }}
+                      >
+                        {showQualityMetrics ? 'Hide Quality' : 'Show Quality'}
+                      </button>
+                      <button 
+                        onClick={() => setShowFeedbackModal(true)}
+                        style={{
+                          ...styles.ipodButton,
+                          ...styles.feedbackButton
+                        }}
+                      >
+                        Rate Playlist
+                      </button>
+                      <button 
+                        onClick={() => setShowSaveModal(true)}
+                        style={{
+                          ...styles.ipodButton,
+                          ...styles.saveButton
+                        }}
+                      >
+                        Save Playlist
+                      </button>
+                      <button 
+                        onClick={handleExportToSpotify} 
+                        style={{
+                          ...styles.ipodButton,
+                          ...styles.exportButton
+                        }}
+                        disabled={exporting}
+                      >
+                        {exporting ? 'Exporting...' : 'Export to Spotify'}
+                      </button>
+                    </div>
                   </div>
+
+                  {/* Métricas de Qualidade */}
+                  {showQualityMetrics && playlistAnalysis?.qualityValidation && (
+                    <div style={styles.qualityMetricsContainer}>
+                      <h3 style={styles.qualityTitle}>Playlist Quality Analysis</h3>
+                      <div style={styles.qualityScore}>
+                        Overall Score: <span style={styles.scoreValue}>{playlistAnalysis.qualityValidation.score}/100</span>
+                      </div>
+                      <div style={styles.metricsGrid}>
+                        <div style={styles.metricItem}>
+                          <div style={styles.metricLabel}>Coherence</div>
+                          <div style={styles.metricValue}>{playlistAnalysis.qualityValidation.metrics.coherence}%</div>
+                        </div>
+                        <div style={styles.metricItem}>
+                          <div style={styles.metricLabel}>Diversity</div>
+                          <div style={styles.metricValue}>{playlistAnalysis.qualityValidation.metrics.diversity}%</div>
+                        </div>
+                        <div style={styles.metricItem}>
+                          <div style={styles.metricLabel}>Flow</div>
+                          <div style={styles.metricValue}>{playlistAnalysis.qualityValidation.metrics.flow}%</div>
+                        </div>
+                        <div style={styles.metricItem}>
+                          <div style={styles.metricLabel}>Cultural Consistency</div>
+                          <div style={styles.metricValue}>{playlistAnalysis.qualityValidation.metrics.culturalConsistency}%</div>
+                        </div>
+                      </div>
+                      {playlistAnalysis.qualityValidation.recommendations.length > 0 && (
+                        <div style={styles.recommendationsContainer}>
+                          <h4 style={styles.recommendationsTitle}>Recommendations:</h4>
+                          <ul style={styles.recommendationsList}>
+                            {playlistAnalysis.qualityValidation.recommendations.map((rec, index) => (
+                              <li key={index} style={styles.recommendationItem}>{rec}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Análise Cultural */}
+                  {playlistAnalysis?.culturalContext && (
+                    <div style={styles.culturalAnalysisContainer}>
+                      <h3 style={styles.culturalTitle}>Cultural Analysis</h3>
+                      <div style={styles.culturalInfo}>
+                        <div style={styles.culturalItem}>
+                          <strong>Era:</strong> {playlistAnalysis.culturalContext.culturalEra}
+                        </div>
+                        <div style={styles.culturalItem}>
+                          <strong>Time Range:</strong> {playlistAnalysis.culturalContext.timeRange[0]} - {playlistAnalysis.culturalContext.timeRange[1]}
+                        </div>
+                        <div style={styles.culturalItem}>
+                          <strong>Keywords:</strong> {playlistAnalysis.culturalContext.eraKeywords.join(', ')}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Vibe Analysis */}
+                  {playlistAnalysis?.inferredVibe && (
+                    <div style={styles.vibeAnalysisContainer}>
+                      <h3 style={styles.vibeTitle}>Musical Vibe</h3>
+                      <div style={styles.vibeInfo}>
+                        <div style={styles.vibeItem}>
+                          <strong>Mood:</strong> {playlistAnalysis.inferredVibe.mood}
+                          {playlistAnalysis.inferredVibe.subMood && ` (${playlistAnalysis.inferredVibe.subMood})`}
+                        </div>
+                        <div style={styles.vibeItem}>
+                          <strong>Description:</strong> {playlistAnalysis.inferredVibe.description}
+                        </div>
+                        <div style={styles.vibeItem}>
+                          <strong>Confidence:</strong> {playlistAnalysis.inferredVibe.confidence}%
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   
                   <ul style={styles.ipodList}>
                     {playlist.map((track, index) => (
@@ -545,18 +911,30 @@ const Home = () => {
                             alt={track.name} 
                             style={styles.trackCover}
                           />
-                          <div>
+                          <div style={styles.trackDetails}>
                             <div style={styles.listItemName}>{track.name}</div>
                             <div style={styles.listItemArtist}>{track.artist}</div>
+                            {track.similarity && (
+                              <div style={styles.similarityBadge}>
+                                {track.similarity}% match
+                              </div>
+                            )}
                           </div>
                         </div>
-                        <button
-                          onClick={() => removeTrackFromPlaylist(index)}
-                          style={styles.removeButton}
-                          title="Remove track"
-                        >
-                          ✕
-                        </button>
+                        <div style={styles.trackActions}>
+                          {showFeedbackModal && (
+                            <div style={styles.trackRating}>
+                              {renderStars(trackRatings[track.id] || 0, (rating) => rateTrack(track.id, rating), 'small')}
+                            </div>
+                          )}
+                          <button
+                            onClick={() => removeTrackFromPlaylist(index)}
+                            style={styles.removeButton}
+                            title="Remove track"
+                          >
+                            ✕
+                          </button>
+                        </div>
                       </li>
                     ))}
                   </ul>
@@ -566,6 +944,148 @@ const Home = () => {
           )}
         </div>
       </main>
+
+      {/* Modal de Feedback */}
+      {showFeedbackModal && (
+        <div style={styles.modalOverlay}>
+          <div style={styles.modalContent}>
+            <div style={styles.modalHeader}>
+              <h2 style={styles.modalTitle}>Rate This Playlist</h2>
+              <button 
+                onClick={() => setShowFeedbackModal(false)}
+                style={styles.closeButton}
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div style={styles.modalBody}>
+              <div style={styles.overallRatingSection}>
+                <h3 style={styles.ratingSectionTitle}>Overall Rating</h3>
+                {renderStars(overallRating, setOverallRating)}
+              </div>
+              
+              <div style={styles.trackRatingsSection}>
+                <h3 style={styles.ratingSectionTitle}>Rate Individual Tracks</h3>
+                <div style={styles.trackRatingsList}>
+                  {playlist.slice(0, 10).map((track, index) => (
+                    <div key={track.id} style={styles.trackRatingItem}>
+                      <img 
+                        src={track.albumImages?.[0]?.url || ''} 
+                        alt={track.name} 
+                        style={styles.ratingTrackCover}
+                      />
+                      <div style={styles.ratingTrackInfo}>
+                        <div style={styles.ratingTrackName}>{track.name}</div>
+                        <div style={styles.ratingTrackArtist}>{track.artist}</div>
+                      </div>
+                      {renderStars(trackRatings[track.id] || 0, (rating) => rateTrack(track.id, rating), 'small')}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            
+            <div style={styles.modalFooter}>
+              <button 
+                onClick={() => setShowFeedbackModal(false)}
+                style={styles.cancelButton}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleSubmitFeedback}
+                style={styles.submitButton}
+              >
+                Submit Feedback
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal para Salvar Playlist */}
+      {showSaveModal && (
+        <div style={styles.modalOverlay}>
+          <div style={styles.modalContent}>
+            <div style={styles.modalHeader}>
+              <h2 style={styles.modalTitle}>Save Playlist</h2>
+              <button 
+                onClick={() => setShowSaveModal(false)}
+                style={styles.closeButton}
+              >
+                ✕
+              </button>
+            </div>
+            
+            <div style={styles.modalBody}>
+              <div style={styles.savePlaylistSection}>
+                <label style={styles.inputLabel}>Playlist Name:</label>
+                <input
+                  type="text"
+                  value={playlistName}
+                  onChange={(e) => setPlaylistName(e.target.value)}
+                  placeholder="Enter playlist name..."
+                  style={styles.playlistNameInput}
+                  maxLength={50}
+                />
+                <div style={styles.playlistPreview}>
+                  <div style={styles.previewTitle}>Preview:</div>
+                  <div style={styles.previewInfo}>
+                    <strong>{playlistName || 'Untitled Playlist'}</strong>
+                    <div style={styles.previewMeta}>
+                      {playlist.length} tracks • Created {new Date().toLocaleDateString()}
+                    </div>
+                    {playlistAnalysis?.culturalContext && (
+                      <div style={styles.previewContext}>
+                        Era: {playlistAnalysis.culturalContext.culturalEra} • 
+                        Mood: {playlistAnalysis.inferredVibe?.mood || 'Unknown'}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            <div style={styles.modalFooter}>
+              <button 
+                onClick={() => setShowSaveModal(false)}
+                style={styles.cancelButton}
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={savePlaylist}
+                style={styles.submitButton}
+                disabled={!playlistName.trim()}
+              >
+                Save Playlist
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Estatísticas de Feedback */}
+      {feedbackStats && (
+        <div style={styles.feedbackStatsContainer}>
+          <div style={styles.statsTitle}>System Statistics</div>
+          <div style={styles.statsGrid}>
+            <div style={styles.statItem}>
+              <div style={styles.statValue}>{feedbackStats.totalFeedbacks || 0}</div>
+              <div style={styles.statLabel}>Total Feedbacks</div>
+            </div>
+            <div style={styles.statItem}>
+              <div style={styles.statValue}>{feedbackStats.trackRatings || 0}</div>
+              <div style={styles.statLabel}>Track Ratings</div>
+            </div>
+            <div style={styles.statItem}>
+              <div style={styles.statValue}>{feedbackStats.avgRating ? feedbackStats.avgRating.toFixed(1) : 'N/A'}</div>
+              <div style={styles.statLabel}>Avg Rating</div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -778,10 +1298,8 @@ const styles = {
     color: '#fff',
     borderColor: '#28a745',
     fontWeight: '600',
-     flex: 'none',
-    width: 'fit-content',
-    padding: '8px 16px',
-    fontSize: '13px',
+    fontSize: '12px',
+    padding: '6px 12px',
   },
   buttonDisabled: {
     opacity: 0.5,
@@ -975,6 +1493,441 @@ const styles = {
   volumeControlDisabled: {
     opacity: 0.4,
     pointerEvents: 'none',
+  },
+  
+  // Novos estilos para funcionalidades avançadas
+  playlistActions: {
+    display: 'flex',
+    gap: '8px',
+    alignItems: 'center',
+  },
+  qualityButton: {
+    background: 'linear-gradient(to bottom, #ff9500, #ff6b00)',
+    color: '#fff',
+    borderColor: '#ff6b00',
+    fontWeight: '600',
+    fontSize: '12px',
+    padding: '6px 12px',
+  },
+  feedbackButton: {
+    background: 'linear-gradient(to bottom, #ff3b30, #d70015)',
+    color: '#fff',
+    borderColor: '#d70015',
+    fontWeight: '600',
+    fontSize: '12px',
+    padding: '6px 12px',
+  },
+  qualityMetricsContainer: {
+    background: '#fff',
+    borderRadius: '8px',
+    padding: '16px',
+    marginBottom: '16px',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+  },
+  qualityTitle: {
+    fontSize: '16px',
+    fontWeight: '600',
+    margin: '0 0 12px 0',
+    color: '#1a1a1a',
+  },
+  qualityScore: {
+    fontSize: '18px',
+    fontWeight: '700',
+    marginBottom: '16px',
+    textAlign: 'center',
+  },
+  scoreValue: {
+    color: '#007aff',
+  },
+  metricsGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2, 1fr)',
+    gap: '12px',
+    marginBottom: '16px',
+  },
+  metricItem: {
+    background: '#f8f9fa',
+    padding: '12px',
+    borderRadius: '6px',
+    textAlign: 'center',
+  },
+  metricLabel: {
+    fontSize: '12px',
+    color: '#666',
+    marginBottom: '4px',
+  },
+  metricValue: {
+    fontSize: '16px',
+    fontWeight: '600',
+    color: '#1a1a1a',
+  },
+  recommendationsContainer: {
+    background: '#f8f9fa',
+    padding: '12px',
+    borderRadius: '6px',
+  },
+  recommendationsTitle: {
+    fontSize: '14px',
+    fontWeight: '600',
+    margin: '0 0 8px 0',
+    color: '#1a1a1a',
+  },
+  recommendationsList: {
+    margin: 0,
+    paddingLeft: '16px',
+  },
+  recommendationItem: {
+    fontSize: '13px',
+    color: '#666',
+    marginBottom: '4px',
+  },
+  culturalAnalysisContainer: {
+    background: '#fff',
+    borderRadius: '8px',
+    padding: '16px',
+    marginBottom: '16px',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+  },
+  culturalTitle: {
+    fontSize: '16px',
+    fontWeight: '600',
+    margin: '0 0 12px 0',
+    color: '#1a1a1a',
+  },
+  culturalInfo: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+  },
+  culturalItem: {
+    fontSize: '14px',
+    color: '#666',
+  },
+  vibeAnalysisContainer: {
+    background: '#fff',
+    borderRadius: '8px',
+    padding: '16px',
+    marginBottom: '16px',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+  },
+  vibeTitle: {
+    fontSize: '16px',
+    fontWeight: '600',
+    margin: '0 0 12px 0',
+    color: '#1a1a1a',
+  },
+  vibeInfo: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+  },
+  vibeItem: {
+    fontSize: '14px',
+    color: '#666',
+  },
+  trackDetails: {
+    flex: 1,
+  },
+  trackActions: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  trackRating: {
+    display: 'flex',
+    alignItems: 'center',
+  },
+  modalOverlay: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1000,
+  },
+  modalContent: {
+    background: '#fff',
+    borderRadius: '12px',
+    width: '90%',
+    maxWidth: '600px',
+    maxHeight: '80vh',
+    overflow: 'hidden',
+    boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+  },
+  modalHeader: {
+    padding: '20px',
+    borderBottom: '1px solid #e8e8ec',
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: '18px',
+    fontWeight: '600',
+    margin: 0,
+    color: '#1a1a1a',
+  },
+  closeButton: {
+    background: 'transparent',
+    border: 'none',
+    fontSize: '20px',
+    cursor: 'pointer',
+    color: '#666',
+    padding: '4px',
+  },
+  modalBody: {
+    padding: '20px',
+    maxHeight: '50vh',
+    overflowY: 'auto',
+  },
+  overallRatingSection: {
+    marginBottom: '24px',
+    textAlign: 'center',
+  },
+  ratingSectionTitle: {
+    fontSize: '16px',
+    fontWeight: '600',
+    margin: '0 0 12px 0',
+    color: '#1a1a1a',
+  },
+  trackRatingsSection: {
+    marginBottom: '16px',
+  },
+  trackRatingsList: {
+    maxHeight: '200px',
+    overflowY: 'auto',
+  },
+  trackRatingItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+    padding: '8px 0',
+    borderBottom: '1px solid #f0f0f0',
+  },
+  ratingTrackCover: {
+    width: '40px',
+    height: '40px',
+    borderRadius: '4px',
+    objectFit: 'cover',
+  },
+  ratingTrackInfo: {
+    flex: 1,
+  },
+  ratingTrackName: {
+    fontSize: '14px',
+    fontWeight: '500',
+    color: '#1a1a1a',
+    marginBottom: '2px',
+  },
+  ratingTrackArtist: {
+    fontSize: '12px',
+    color: '#666',
+  },
+  modalFooter: {
+    padding: '20px',
+    borderTop: '1px solid #e8e8ec',
+    display: 'flex',
+    justifyContent: 'flex-end',
+    gap: '12px',
+  },
+  cancelButton: {
+    background: 'transparent',
+    border: '1px solid #c8c8cc',
+    borderRadius: '6px',
+    padding: '8px 16px',
+    fontSize: '14px',
+    cursor: 'pointer',
+    color: '#666',
+  },
+  submitButton: {
+    background: 'linear-gradient(to bottom, #007aff, #0051d5)',
+    border: 'none',
+    borderRadius: '6px',
+    padding: '8px 16px',
+    fontSize: '14px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    color: '#fff',
+  },
+  feedbackStatsContainer: {
+    position: 'fixed',
+    bottom: '20px',
+    right: '20px',
+    background: '#fff',
+    borderRadius: '8px',
+    padding: '12px',
+    boxShadow: '0 4px 12px rgba(0,0,0,0.15)',
+    zIndex: 100,
+  },
+  statsTitle: {
+    fontSize: '12px',
+    fontWeight: '600',
+    color: '#666',
+    marginBottom: '8px',
+    textAlign: 'center',
+  },
+  statsGrid: {
+    display: 'flex',
+    gap: '12px',
+  },
+  statItem: {
+    textAlign: 'center',
+  },
+  statValue: {
+    fontSize: '16px',
+    fontWeight: '700',
+    color: '#007aff',
+  },
+  statLabel: {
+    fontSize: '10px',
+    color: '#666',
+    marginTop: '2px',
+  },
+  
+  // Estilos para funcionalidades de playlist salva
+  resetButton: {
+    background: 'linear-gradient(to bottom, #8e8e93, #6d6d70)',
+    color: '#fff',
+    borderColor: '#6d6d70',
+    fontWeight: '600',
+  },
+  saveButton: {
+    background: 'linear-gradient(to bottom, #007aff, #0051d5)',
+    color: '#fff',
+    borderColor: '#0051d5',
+    fontWeight: '600',
+    fontSize: '12px',
+    padding: '6px 12px',
+  },
+  savedPlaylistsButton: {
+    background: 'linear-gradient(to bottom, #007aff, #0051d5)',
+    color: '#fff',
+    borderColor: '#0051d5',
+    fontWeight: '600',
+    fontSize: '12px',
+    padding: '6px 12px',
+    marginTop: '12px',
+  },
+  savedPlaylistsSection: {
+    marginTop: '16px',
+  },
+  savedPlaylistsContainer: {
+    background: '#fff',
+    borderRadius: '8px',
+    padding: '16px',
+    marginTop: '12px',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+  },
+  savedPlaylistsTitle: {
+    fontSize: '16px',
+    fontWeight: '600',
+    margin: '0 0 12px 0',
+    color: '#1a1a1a',
+  },
+  savedPlaylistsList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+  },
+  savedPlaylistItem: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '12px',
+    background: '#f8f9fa',
+    borderRadius: '6px',
+    border: '1px solid #e8e8ec',
+  },
+  savedPlaylistInfo: {
+    flex: 1,
+  },
+  savedPlaylistName: {
+    fontSize: '14px',
+    fontWeight: '600',
+    color: '#1a1a1a',
+    marginBottom: '4px',
+  },
+  savedPlaylistMeta: {
+    fontSize: '12px',
+    color: '#666',
+  },
+  savedPlaylistActions: {
+    display: 'flex',
+    gap: '8px',
+  },
+  loadButton: {
+    background: 'linear-gradient(to bottom, #007aff, #0051d5)',
+    border: 'none',
+    borderRadius: '4px',
+    padding: '6px 12px',
+    fontSize: '12px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    color: '#fff',
+  },
+  deleteButton: {
+    background: 'linear-gradient(to bottom, #ff3b30, #d70015)',
+    border: 'none',
+    borderRadius: '4px',
+    padding: '6px 12px',
+    fontSize: '12px',
+    fontWeight: '600',
+    cursor: 'pointer',
+    color: '#fff',
+  },
+  savePlaylistSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '16px',
+  },
+  inputLabel: {
+    fontSize: '14px',
+    fontWeight: '600',
+    color: '#1a1a1a',
+    marginBottom: '8px',
+  },
+  playlistNameInput: {
+    width: '100%',
+    border: '1px solid #c8c8cc',
+    background: '#fff',
+    padding: '12px 16px',
+    fontSize: '15px',
+    borderRadius: '8px',
+    fontFamily: 'inherit',
+    boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.08)',
+    transition: 'border-color 0.2s',
+    outline: 'none',
+  },
+  playlistPreview: {
+    background: '#f8f9fa',
+    padding: '16px',
+    borderRadius: '8px',
+    border: '1px solid #e8e8ec',
+  },
+  previewTitle: {
+    fontSize: '14px',
+    fontWeight: '600',
+    color: '#1a1a1a',
+    marginBottom: '8px',
+  },
+  previewInfo: {
+    fontSize: '14px',
+    color: '#666',
+  },
+  previewMeta: {
+    fontSize: '12px',
+    color: '#999',
+    marginTop: '4px',
+  },
+  previewContext: {
+    fontSize: '12px',
+    color: '#007aff',
+    marginTop: '4px',
+    fontWeight: '500',
   },
 };
 

@@ -23,7 +23,7 @@ if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET || !pro
 
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://127.0.0.1:3000';
 const BACKEND_URL = process.env.BACKEND_URL || 'http://127.0.0.1:5000';
-const MAX_CANDIDATES = 50;
+const MAX_CANDIDATES = 80;
 
 app.use(cors({ origin: FRONTEND_URL }));
 app.use(express.json());
@@ -94,6 +94,188 @@ app.post('/search-suggestions', async (req, res) => {
     res.status(err.statusCode || 500).json({ error: err.message });
   }
 });
+
+// Análise de sentimento musical expandida
+const analyzeMusicalSentiment = (trackFeatures, culturalContext = null) => {
+  const sentiment = {
+    emotional: trackFeatures.valence < 0.3 ? 'melancholic' : 
+               trackFeatures.valence > 0.7 ? 'uplifting' : 'neutral',
+    social: trackFeatures.danceability > 0.7 ? 'party' : 
+           trackFeatures.danceability < 0.3 ? 'intimate' : 'social',
+    cultural: null,
+    nostalgic: false,
+    intensity: trackFeatures.energy > 0.7 ? 'high' : 
+              trackFeatures.energy < 0.3 ? 'low' : 'medium'
+  };
+
+  // Detectar significância cultural baseada na era
+  if (culturalContext) {
+    const { culturalEra, eraKeywords } = culturalContext;
+    sentiment.cultural = culturalEra;
+    
+    // Detectar nostalgia baseada na era e características
+    if (culturalEra === '90s' || culturalEra === '80s') {
+      sentiment.nostalgic = trackFeatures.acousticness > 0.4 || 
+                           trackFeatures.instrumentalness > 0.3;
+    }
+  }
+
+  // Detectar sub-gêneros baseados em características
+  if (trackFeatures.speechiness > 0.6) {
+    sentiment.rap = true;
+  }
+  if (trackFeatures.acousticness > 0.7) {
+    sentiment.acoustic = true;
+  }
+  if (trackFeatures.instrumentalness > 0.5) {
+    sentiment.instrumental = true;
+  }
+
+  return sentiment;
+};
+
+// Sistema de validação de qualidade da playlist
+const validatePlaylistQuality = (playlist, seedTracks, culturalContext) => {
+  const metrics = {
+    coherence: calculateCoherence(playlist),
+    diversity: calculateDiversity(playlist),
+    flow: calculateFlow(playlist),
+    culturalConsistency: validateCulturalConsistency(playlist, seedTracks, culturalContext)
+  };
+
+  const overallScore = Object.values(metrics).reduce((a, b) => a + b, 0) / 4;
+  
+  return {
+    score: Math.round(overallScore),
+    metrics,
+    recommendations: generateQualityRecommendations(metrics)
+  };
+};
+
+const calculateCoherence = (playlist) => {
+  if (playlist.length < 2) return 100;
+  
+  let totalSimilarity = 0;
+  let comparisons = 0;
+  
+  for (let i = 0; i < playlist.length - 1; i++) {
+    for (let j = i + 1; j < playlist.length; j++) {
+      const track1 = playlist[i];
+      const track2 = playlist[j];
+      
+      // Calcular similaridade baseada em características básicas
+      const genreSimilarity = calculateGenreSimilarity(track1, track2);
+      const eraSimilarity = calculateEraSimilarity(track1, track2);
+      
+      totalSimilarity += (genreSimilarity + eraSimilarity) / 2;
+      comparisons++;
+    }
+  }
+  
+  return Math.round(totalSimilarity / comparisons);
+};
+
+const calculateDiversity = (playlist) => {
+  const uniqueArtists = new Set(playlist.map(t => t.artist)).size;
+  const uniqueGenres = new Set(playlist.map(t => t.genre || 'unknown')).size;
+  const uniqueEras = new Set(playlist.map(t => t.era || 'unknown')).size;
+  
+  const artistDiversity = Math.min(100, (uniqueArtists / playlist.length) * 100);
+  const genreDiversity = Math.min(100, uniqueGenres * 10);
+  const eraDiversity = Math.min(100, uniqueEras * 15);
+  
+  return Math.round((artistDiversity + genreDiversity + eraDiversity) / 3);
+};
+
+const calculateFlow = (playlist) => {
+  if (playlist.length < 3) return 100;
+  
+  let flowScore = 0;
+  for (let i = 1; i < playlist.length - 1; i++) {
+    const prev = playlist[i - 1];
+    const curr = playlist[i];
+    const next = playlist[i + 1];
+    
+    // Verificar transições suaves
+    const energyFlow = Math.abs((curr.energy || 0.5) - (prev.energy || 0.5)) < 0.3;
+    const tempoFlow = Math.abs((curr.tempo || 120) - (prev.tempo || 120)) < 30;
+    
+    if (energyFlow && tempoFlow) flowScore += 100;
+    else if (energyFlow || tempoFlow) flowScore += 70;
+    else flowScore += 40;
+  }
+  
+  return Math.round(flowScore / (playlist.length - 2));
+};
+
+const validateCulturalConsistency = (playlist, seedTracks, culturalContext) => {
+  if (!culturalContext) return 80;
+  
+  const { culturalEra, timeRange } = culturalContext;
+  let consistentTracks = 0;
+  
+  playlist.forEach(track => {
+    const trackYear = track.year || new Date().getFullYear();
+    const isInRange = trackYear >= (timeRange[0] - 2) && trackYear <= (timeRange[1] + 2);
+    
+    if (isInRange) consistentTracks++;
+  });
+  
+  return Math.round((consistentTracks / playlist.length) * 100);
+};
+
+const generateQualityRecommendations = (metrics) => {
+  const recommendations = [];
+  
+  if (metrics.coherence < 70) {
+    recommendations.push("Considere adicionar mais músicas com características similares");
+  }
+  
+  if (metrics.diversity < 60) {
+    recommendations.push("A playlist poderia ter mais diversidade de artistas e gêneros");
+  }
+  
+  if (metrics.flow < 70) {
+    recommendations.push("As transições entre músicas poderiam ser mais suaves");
+  }
+  
+  if (metrics.culturalConsistency < 80) {
+    recommendations.push("Algumas músicas estão fora do contexto temporal esperado");
+  }
+  
+  return recommendations;
+};
+
+// Funções auxiliares para validação de qualidade
+const calculateGenreSimilarity = (track1, track2) => {
+  const genres1 = track1.genres || [];
+  const genres2 = track2.genres || [];
+  
+  if (genres1.length === 0 || genres2.length === 0) return 50;
+  
+  const intersection = genres1.filter(g => genres2.includes(g));
+  const union = [...new Set([...genres1, ...genres2])];
+  
+  return (intersection.length / union.length) * 100;
+};
+
+const calculateEraSimilarity = (track1, track2) => {
+  const era1 = track1.era || 'unknown';
+  const era2 = track2.era || 'unknown';
+  
+  if (era1 === era2) return 100;
+  if (era1 === 'unknown' || era2 === 'unknown') return 50;
+  
+  // Calcular proximidade temporal
+  const eraOrder = ['80s', '90s', '2000s', '2010s', '2020s'];
+  const index1 = eraOrder.indexOf(era1);
+  const index2 = eraOrder.indexOf(era2);
+  
+  if (index1 === -1 || index2 === -1) return 50;
+  
+  const distance = Math.abs(index1 - index2);
+  return Math.max(0, 100 - (distance * 25));
+};
 
 // Função helper unificada para inferir vibe (substitui inferPlaylistVibeFromMetadata e inferVibeFromMetadata)
 const inferVibe = async (input, lastfmApiKey, type = 'track', extra = {}) => {
@@ -202,17 +384,48 @@ const detectCulturalEra = (seedTracks, topSeedGenres, topSeedDecades) => {
   };
 };
 
-// Similaridade de vibe (adicionado weights para 'chill')
-const calculateEnhancedVibeSimilarity = (candidateFeatures, avgVibe, playlistVibe) => {
-  const weights = {
-    melancholic: { valence: 2.5, energy: 1.5, acousticness: 2.0, tempo: 1.0, loudness: 1.2, danceability: 1.0 },
-    party: { danceability: 2.5, energy: 2.0, valence: 2.0, tempo: 1.8, loudness: 1.5, acousticness: 0.5 },
-    upbeat: { energy: 2.0, danceability: 2.0, tempo: 1.5, valence: 1.5, acousticness: 1.0 },
-    neutral: { danceability: 1.0, energy: 1.0, valence: 1.0, acousticness: 1.0, tempo: 1.0, loudness: 1.0 },
-    chill: { energy: 0.5, danceability: 0.8, valence: 1.0, acousticness: 1.5, tempo: 0.8, loudness: 0.6 }
+// Similaridade de vibe melhorada com foco em características musicais e menos peso na era
+const calculateEnhancedVibeSimilarity = (candidateFeatures, avgVibe, playlistVibe, culturalContext = null) => {
+  // Pesos base por mood - aumentados para dar mais importância à vibe
+  const baseWeights = {
+    melancholic: { valence: 3.0, energy: 1.8, acousticness: 2.5, tempo: 1.2, loudness: 1.5, danceability: 1.2 },
+    party: { danceability: 3.0, energy: 2.5, valence: 2.2, tempo: 2.0, loudness: 1.8, acousticness: 0.6 },
+    upbeat: { energy: 2.5, danceability: 2.2, tempo: 1.8, valence: 1.8, acousticness: 1.2 },
+    neutral: { danceability: 1.2, energy: 1.2, valence: 1.2, acousticness: 1.2, tempo: 1.2, loudness: 1.2 },
+    chill: { energy: 0.6, danceability: 1.0, valence: 1.2, acousticness: 2.0, tempo: 1.0, loudness: 0.8 }
   };
 
-  const w = weights[playlistVibe.mood] || weights.neutral;
+  let w = baseWeights[playlistVibe.mood] || baseWeights.neutral;
+
+  // Reduzir peso da era - aplicar ajustes mais sutis
+  if (culturalContext) {
+    const eraWeights = {
+      '2000s': { danceability: 1.2, energy: 1.1, valence: 1.1, acousticness: 1.05 },
+      '2010s': { acousticness: 1.15, energy: 1.1, valence: 1.1, danceability: 1.1 },
+      '2020s': { speechiness: 1.2, energy: 1.15, valence: 1.1, danceability: 1.1 },
+      '90s': { acousticness: 1.1, energy: 1.05, valence: 1.05, danceability: 1.05 },
+      '80s': { danceability: 1.15, energy: 1.1, valence: 1.05, acousticness: 1.1 }
+    };
+
+    const eraAdjustments = eraWeights[culturalContext.culturalEra] || eraWeights['2000s'];
+    
+    // Aplicar ajustes de era aos pesos base de forma mais sutil
+    Object.keys(eraAdjustments).forEach(key => {
+      if (w[key]) {
+        w[key] = w[key] * eraAdjustments[key];
+      }
+    });
+  }
+
+  // Aplicar feedback do usuário se disponível
+  const trackId = candidateFeatures.id;
+  if (trackId && feedbackSystem) {
+    const feedbackScore = feedbackSystem.getTrackScore(trackId);
+    // Ajustar pesos baseado no feedback
+    Object.keys(w).forEach(key => {
+      w[key] = w[key] * feedbackScore;
+    });
+  }
 
   let dist = Math.sqrt(
     Math.pow((candidateFeatures.danceability - avgVibe.danceability) * (w.danceability || 1), 2) +
@@ -225,53 +438,67 @@ const calculateEnhancedVibeSimilarity = (candidateFeatures, avgVibe, playlistVib
     Math.pow((candidateFeatures.instrumentalness - avgVibe.instrumentalness) * 1.0, 2)
   );
 
-  if (playlistVibe.mood === 'melancholic' && candidateFeatures.valence < 0.3 && avgVibe.valence < 0.3) dist *= 0.85;
+  // Bonificações contextuais mais agressivas para vibe
+  if (playlistVibe.mood === 'melancholic' && candidateFeatures.valence < 0.3 && avgVibe.valence < 0.3) dist *= 0.75;
   if (playlistVibe.mood === 'party' && candidateFeatures.energy > 0.7 && avgVibe.energy > 0.7 &&
       candidateFeatures.danceability > 0.7 && avgVibe.danceability > 0.7) {
-    dist *= 0.80;
+    dist *= 0.70;
+  }
+  if (playlistVibe.mood === 'chill' && candidateFeatures.energy < 0.5 && avgVibe.energy < 0.5 &&
+      candidateFeatures.acousticness > 0.4 && avgVibe.acousticness > 0.4) {
+    dist *= 0.75;
   }
 
-  return Math.max(0, 100 - (dist * 15));
+  // Bonificação por contexto cultural reduzida
+  if (culturalContext && culturalContext.isFocusedEra) {
+    dist *= 0.95; // Apenas 5% de bonificação para eras focadas
+  }
+
+  return Math.max(0, 100 - (dist * 12)); // Reduzir multiplicador para scores mais altos
 };
 
-// Validação de vibe match (mantido)
+// Validação de vibe match mais flexível para diferentes eras
 const isVibeMatch = (candFeatures, playlistVibe) => {
   const { mood, subMood, profile } = playlistVibe;
 
+  // Validações mais flexíveis para permitir músicas de diferentes eras
   if (mood === 'melancholic' || subMood === 'sad-trap') {
-    if (candFeatures.valence > 0.5) return false;
-    if (candFeatures.energy > 0.7) return false;
+    if (candFeatures.valence > 0.6) return false; // Mais flexível (era 0.5)
+    if (candFeatures.energy > 0.8) return false; // Mais flexível (era 0.7)
   }
 
   if (mood === 'party') {
-    if (candFeatures.danceability < 0.45) return false;
-    if (candFeatures.energy < 0.55) return false;
+    if (candFeatures.danceability < 0.35) return false; // Mais flexível (era 0.45)
+    if (candFeatures.energy < 0.45) return false; // Mais flexível (era 0.55)
   }
 
   if (mood === 'chill' || subMood === 'mellow') {
-    if (candFeatures.energy > 0.65) return false;
-    if (candFeatures.loudness > -5) return false;
+    if (candFeatures.energy > 0.75) return false; // Mais flexível (era 0.65)
+    if (candFeatures.loudness > -3) return false; // Mais flexível (era -5)
   }
 
   if (subMood === 'acoustic' || profile.isAcoustic) {
-    if (candFeatures.acousticness < 0.3) return false;
+    if (candFeatures.acousticness < 0.2) return false; // Mais flexível (era 0.3)
   }
 
   return true;
 };
 
-// Match por metadata (usa inferVibe)
+// Match por metadata mais flexível para diferentes eras
 const isVibeMatchByMetadata = async (track, playlistVibe, lastfmApiKey) => {
   const trackVibe = await inferVibe(track, lastfmApiKey, 'track');
 
-  if (trackVibe.confidence < 40) return true;
+  if (trackVibe.confidence < 30) return true; // Mais flexível (era 40)
   if (trackVibe.mood === playlistVibe.mood) return true;
 
+  // Compatibilidade expandida para permitir mais combinações
   const compatible = {
-    melancholic: ['chill', 'neutral'],
-    party: ['upbeat', 'neutral'],
-    chill: ['melancholic', 'neutral'],
-    aggressive: ['party', 'neutral']
+    melancholic: ['chill', 'neutral', 'party'], // Adicionado party
+    party: ['upbeat', 'neutral', 'chill'], // Adicionado chill
+    chill: ['melancholic', 'neutral', 'party'], // Adicionado party
+    upbeat: ['party', 'neutral', 'chill'], // Novo
+    neutral: ['melancholic', 'party', 'chill', 'upbeat'], // Expandido
+    aggressive: ['party', 'neutral', 'upbeat'] // Expandido
   };
 
   return compatible[playlistVibe.mood]?.includes(trackVibe.mood) || false;
@@ -885,7 +1112,7 @@ app.post('/analyze', async (req, res) => {
         let simScore = 85;
         if (candFeatures) {
           if (!isVibeMatch(candFeatures, playlistVibe)) continue;
-          simScore = calculateEnhancedVibeSimilarity(candFeatures, avgVibe, playlistVibe);
+          simScore = calculateEnhancedVibeSimilarity(candFeatures, avgVibe, playlistVibe, culturalContext);
         } else if (lastfmApiKey) {
           if (!(await isVibeMatchByMetadata(track, playlistVibe, lastfmApiKey))) continue;
           simScore = 80;
@@ -945,7 +1172,7 @@ app.post('/analyze', async (req, res) => {
             if (featuresAvailable) {
               const featData = await spotifyLimiter.execute(() => api.getAudioFeaturesForTracks([track.id]));
               const candFeatures = featData.body.audio_features[0];
-              if (candFeatures) simScore = calculateEnhancedVibeSimilarity(candFeatures, avgVibe, playlistVibe);
+              if (candFeatures) simScore = calculateEnhancedVibeSimilarity(candFeatures, avgVibe, playlistVibe, culturalContext);
             } else if (lastfmApiKey) {
               if (!(await isVibeMatchByMetadata(track, playlistVibe, lastfmApiKey))) continue;
               simScore = 75;
@@ -979,7 +1206,7 @@ app.post('/analyze', async (req, res) => {
               if (featuresAvailable) {
                 const featData = await spotifyLimiter.execute(() => api.getAudioFeaturesForTracks([track.id]));
                 const candFeatures = featData.body.audio_features[0];
-                if (candFeatures) simScore = calculateEnhancedVibeSimilarity(candFeatures, avgVibe, playlistVibe);
+                if (candFeatures) simScore = calculateEnhancedVibeSimilarity(candFeatures, avgVibe, playlistVibe, culturalContext);
               } else if (lastfmApiKey) {
                 if (!(await isVibeMatchByMetadata(track, playlistVibe, lastfmApiKey))) continue;
                 simScore = 90;
@@ -1006,7 +1233,7 @@ app.post('/analyze', async (req, res) => {
                     const candFeatures = featData.body.audio_features[0];
                     if (candFeatures) {
                       if (!isVibeMatch(candFeatures, playlistVibe)) continue;
-                      const vibeSim = calculateEnhancedVibeSimilarity(candFeatures, avgVibe, playlistVibe);
+                      const vibeSim = calculateEnhancedVibeSimilarity(candFeatures, avgVibe, playlistVibe, culturalContext);
                       similarityScore = Math.round(0.6 * vibeSim + 0.4 * similarityScore);
                     }
                   } else if (lastfmApiKey) {
@@ -1072,7 +1299,7 @@ app.post('/analyze', async (req, res) => {
               if (featuresAvailable) {
                 const featData = await spotifyLimiter.execute(() => api.getAudioFeaturesForTracks([track.id]));
                 const candFeatures = featData.body.audio_features[0];
-                if (candFeatures) simScore = calculateEnhancedVibeSimilarity(candFeatures, avgVibe, playlistVibe);
+                if (candFeatures) simScore = calculateEnhancedVibeSimilarity(candFeatures, avgVibe, playlistVibe, culturalContext);
               } else if (lastfmApiKey) {
                 if (!(await isVibeMatchByMetadata(track, playlistVibe, lastfmApiKey))) continue;
                 simScore = 75;
@@ -1225,7 +1452,7 @@ app.post('/analyze', async (req, res) => {
       - Circle 1 (seeds diretos): ${circle1Tracks.length}
       - Outros: ${otherTracks.length}
     `);
-    const targetSize = Math.min(50, 30 + seedTracks.length) - seedTracks.length;
+    const targetSize = Math.min(60, 40 + seedTracks.length) - seedTracks.length;
     finalSelection.push(
       ...eraContextTracks.sort((a, b) => b.similarity - a.similarity).slice(0, Math.floor(targetSize * 0.5)),
       ...circle1Tracks.sort((a, b) => b.similarity - a.similarity).slice(0, Math.floor(targetSize * 0.3)),
@@ -1240,6 +1467,10 @@ app.post('/analyze', async (req, res) => {
       albumImages: track.album?.images || [], similarity: Math.round(track.similarity || 0), uri: track.uri
     }));
     const avgSimilarity = finalPlaylist.reduce((sum, t) => sum + t.similarity, 0) / finalPlaylist.length;
+    
+    // Validar qualidade da playlist
+    const qualityValidation = validatePlaylistQuality(finalPlaylist, seedTracks, culturalContext);
+    
     const responseData = {
       similarities: finalPlaylist,
       avgSimilarity: Math.round(avgSimilarity),
@@ -1248,7 +1479,8 @@ app.post('/analyze', async (req, res) => {
       genreDistribution,
       decadeDistribution,
       inferredVibe: playlistVibe,
-      culturalContext
+      culturalContext,
+      qualityValidation
     };
     console.log(lastfmCache.stats());
     console.log(lastfmLimiter.stats());
@@ -1303,6 +1535,102 @@ app.post('/refresh_token', async (req, res) => {
   } catch (err) {
     console.error('Erro em /refresh_token:', err.body || err);
     res.status(403).json({ error: 'Falha ao renovar token.', details: err.body });
+  }
+});
+
+// Sistema de Feedback do Usuário
+class PlaylistFeedback {
+  constructor() {
+    this.userPreferences = new Map();
+    this.successfulCombinations = [];
+    this.trackRatings = new Map();
+  }
+
+  recordFeedback(playlistId, trackRatings, overallRating, playlistContext) {
+    const feedback = {
+      playlistId,
+      trackRatings,
+      overallRating,
+      playlistContext,
+      timestamp: Date.now()
+    };
+    
+    this.successfulCombinations.push(feedback);
+    
+    // Aprender padrões de sucesso
+    trackRatings.forEach((rating, trackId) => {
+      if (rating >= 4) { // Rating alto
+        const current = this.trackRatings.get(trackId) || { likes: 0, dislikes: 0 };
+        this.trackRatings.set(trackId, { ...current, likes: current.likes + 1 });
+      } else if (rating <= 2) { // Rating baixo
+        const current = this.trackRatings.get(trackId) || { likes: 0, dislikes: 0 };
+        this.trackRatings.set(trackId, { ...current, dislikes: current.dislikes + 1 });
+      }
+    });
+    
+    console.log(`Feedback registrado para playlist ${playlistId}: ${overallRating}/5`);
+  }
+
+  adjustWeights(context, trackFeatures) {
+    const culturalEra = context.culturalEra;
+    const baseWeights = {
+      '2000s': { danceability: 2.0, energy: 1.8, valence: 1.5, acousticness: 1.2 },
+      '2010s': { acousticness: 1.8, energy: 1.6, valence: 1.7, danceability: 1.5 },
+      '2020s': { speechiness: 2.0, energy: 1.9, valence: 1.8, danceability: 1.6 }
+    };
+    
+    return baseWeights[culturalEra] || baseWeights['2000s'];
+  }
+
+  getTrackScore(trackId) {
+    const rating = this.trackRatings.get(trackId);
+    if (!rating) return 1.0;
+    
+    const total = rating.likes + rating.dislikes;
+    if (total === 0) return 1.0;
+    
+    return 1.0 + (rating.likes - rating.dislikes) * 0.1;
+  }
+
+  stats() {
+    return {
+      totalFeedbacks: this.successfulCombinations.length,
+      trackRatings: this.trackRatings.size,
+      avgRating: this.successfulCombinations.reduce((sum, f) => sum + f.overallRating, 0) / this.successfulCombinations.length
+    };
+  }
+}
+
+const feedbackSystem = new PlaylistFeedback();
+
+// Rota para feedback do usuário
+app.post('/playlist-feedback', async (req, res) => {
+  try {
+    const { playlistId, trackRatings, overallRating, playlistContext } = req.body;
+    
+    if (!playlistId || !trackRatings || overallRating === undefined) {
+      return res.status(400).json({ error: 'Dados de feedback incompletos' });
+    }
+    
+    feedbackSystem.recordFeedback(playlistId, trackRatings, overallRating, playlistContext);
+    
+    res.json({ 
+      success: true, 
+      message: 'Feedback registrado com sucesso',
+      stats: feedbackSystem.stats()
+    });
+  } catch (err) {
+    console.error('Erro em /playlist-feedback:', err);
+    res.status(500).json({ error: 'Erro ao processar feedback' });
+  }
+});
+
+// Rota para obter estatísticas de feedback
+app.get('/feedback-stats', (req, res) => {
+  try {
+    res.json(feedbackSystem.stats());
+  } catch (err) {
+    res.status(500).json({ error: 'Erro ao obter estatísticas' });
   }
 });
 
