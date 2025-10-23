@@ -71,7 +71,11 @@ const Home = () => {
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [playlistName, setPlaylistName] = useState('');
   const [showSavedPlaylists, setShowSavedPlaylists] = useState(false);
-
+  const [currentLyrics, setCurrentLyrics] = useState(null);
+  const [loadingLyrics, setLoadingLyrics] = useState(false);
+  const [showLyricsModal, setShowLyricsModal] = useState(false);
+  const [playingTrackId, setPlayingTrackId] = useState(null);
+  
   const audioRef = useRef(new Audio());
   const [volume, setVolume] = useState(0.5);
   const searchTimeoutRef = useRef(null);

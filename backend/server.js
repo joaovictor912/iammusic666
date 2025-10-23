@@ -13,6 +13,7 @@ const SpotifyWebApi = require('spotify-web-api-node');
 require('dotenv').config();
 const ApiCache = require('./utils/ApiCache');
 const RateLimiter = require('./utils/RateLimiter');
+const { VibeClusterer } = require('./VibeClusterer');
 const app = express();
 const port = process.env.PORT || 5000;
 
@@ -35,37 +36,7 @@ const spotifyCache = new ApiCache(60 * 60 * 1000, 300);
 const lastfmLimiter = new RateLimiter(2, 20);
 const spotifyLimiter = new RateLimiter(5, 20);
 
-const audioFeaturesCache = new Map();
 const artistGenresCache = new Map();
-
-const fetchAudioFeaturesMap = async (api, ids = []) => {
-  const uniq = Array.from(new Set((ids || []).filter(Boolean)));
-  const resultMap = new Map();
-  if (uniq.length === 0) return resultMap;
-
-  uniq.forEach(id => {
-    if (audioFeaturesCache.has(id)) resultMap.set(id, audioFeaturesCache.get(id));
-  });
-
-  const toFetch = uniq.filter(id => !resultMap.has(id));
-  if (toFetch.length === 0) return resultMap;
-
-  const BATCH_SIZE = 100;
-  for (let i = 0; i < toFetch.length; i += BATCH_SIZE) {
-    const batch = toFetch.slice(i, i + BATCH_SIZE);
-    try {
-      const data = await spotifyLimiter.execute(() => api.getAudioFeaturesForTracks(batch));
-      const feats = (data.body && data.body.audio_features) ? data.body.audio_features : [];
-      feats.filter(f => f && f.id).forEach(f => {
-        audioFeaturesCache.set(f.id, f);
-        resultMap.set(f.id, f);
-      });
-    } catch (e) {
-      console.warn('Erro ao buscar audio-features em lote:', e.message || e);
-    }
-  }
-  return resultMap;
-};
 
 const getArtistsGenres = async (artistIds = [], api) => {
   const ids = Array.from(new Set((artistIds || []).filter(Boolean)));
@@ -390,71 +361,29 @@ const detectCulturalEra = (seedTracks, topSeedGenres, topSeedDecades) => {
   };
 };
 
-const calculateEnhancedVibeSimilarity = (candidateFeatures, avgVibe, playlistVibe, culturalContext = null) => {
-  const baseWeights = {
-    melancholic: { valence: 3.0, energy: 1.8, acousticness: 2.5, tempo: 1.2, loudness: 1.5, danceability: 1.2 },
-    party: { danceability: 3.0, energy: 2.5, valence: 2.2, tempo: 2.0, loudness: 1.8, acousticness: 0.6 },
-    upbeat: { energy: 2.5, danceability: 2.2, tempo: 1.8, valence: 1.8, acousticness: 1.2 },
-    neutral: { danceability: 1.2, energy: 1.2, valence: 1.2, acousticness: 1.2, tempo: 1.2, loudness: 1.2 },
-    chill: { energy: 0.6, danceability: 1.0, valence: 1.2, acousticness: 2.0, tempo: 1.0, loudness: 0.8 }
-  };
-  let w = baseWeights[playlistVibe.mood] || baseWeights.neutral;
-  if (culturalContext) {
-    const eraWeights = {
-      '2000s': { danceability: 1.2, energy: 1.1, valence: 1.1, acousticness: 1.05 },
-      '2010s': { acousticness: 1.15, energy: 1.1, valence: 1.1, danceability: 1.1 },
-      '2020s': { speechiness: 1.2, energy: 1.15, valence: 1.1, danceability: 1.1 },
-      '90s': { acousticness: 1.1, energy: 1.05, valence: 1.05, danceability: 1.05 },
-      '80s': { danceability: 1.15, energy: 1.1, valence: 1.05, acousticness: 1.1 }
-    };
-    const eraAdjustments = eraWeights[culturalContext.culturalEra] || eraWeights['2000s'];
-    Object.keys(eraAdjustments).forEach(key => {
-      if (w[key]) w[key] = w[key] * eraAdjustments[key];
-    });
+const calculateEnhancedVibeSimilarity = (track, avgVibe, playlistVibe, culturalContext = null) => {
+  // Simplified similarity calculation based on metadata only
+  let baseScore = 85;
+  
+  if (culturalContext && culturalContext.isFocusedEra) {
+    const trackYear = parseInt(track.album?.release_date?.substring(0, 4));
+    if (trackYear && culturalContext.timeRange) {
+      if (trackYear >= culturalContext.timeRange[0] && trackYear <= culturalContext.timeRange[1]) {
+        baseScore += 10;
+      }
+    }
   }
-  const trackId = candidateFeatures.id;
+
   if (trackId && feedbackSystem) {
     const feedbackScore = feedbackSystem.getTrackScore(trackId);
-    Object.keys(w).forEach(key => {
-      w[key] = w[key] * feedbackScore;
-    });
+    baseScore *= feedbackScore;
   }
-  let dist = Math.sqrt(
-    Math.pow((candidateFeatures.danceability - avgVibe.danceability) * (w.danceability || 1), 2) +
-    Math.pow((candidateFeatures.energy - avgVibe.energy) * (w.energy || 1), 2) +
-    Math.pow((candidateFeatures.valence - avgVibe.valence) * (w.valence || 1), 2) +
-    Math.pow((candidateFeatures.acousticness - avgVibe.acousticness) * (w.acousticness || 1), 2) +
-    Math.pow((candidateFeatures.tempo - avgVibe.tempo) / 30 * (w.tempo || 1), 2) +
-    Math.pow((candidateFeatures.loudness - avgVibe.loudness) / 5 * (w.loudness || 1), 2) +
-    Math.pow((candidateFeatures.speechiness - avgVibe.speechiness) * 1.2, 2) +
-    Math.pow((candidateFeatures.instrumentalness - avgVibe.instrumentalness) * 1.0, 2)
-  );
-  if (playlistVibe.mood === 'melancholic' && candidateFeatures.valence < 0.3 && avgVibe.valence < 0.3) dist *= 0.75;
-  if (playlistVibe.mood === 'party' && candidateFeatures.energy > 0.7 && avgVibe.energy > 0.7 &&
-      candidateFeatures.danceability > 0.7 && avgVibe.danceability > 0.7) dist *= 0.70;
-  if (playlistVibe.mood === 'chill' && candidateFeatures.energy < 0.5 && avgVibe.energy < 0.5 &&
-      candidateFeatures.acousticness > 0.4 && avgVibe.acousticness > 0.4) dist *= 0.75;
-  if (culturalContext && culturalContext.isFocusedEra) dist *= 0.95;
-  return Math.max(0, 100 - (dist * 12));
+
+  return Math.min(100, baseScore);
 };
 
-const isVibeMatch = (candFeatures, playlistVibe) => {
-  const { mood, subMood, profile } = playlistVibe;
-  if (mood === 'melancholic' || subMood === 'sad-trap') {
-    if (candFeatures.valence > 0.6) return false;
-    if (candFeatures.energy > 0.8) return false;
-  }
-  if (mood === 'party') {
-    if (candFeatures.danceability < 0.35) return false;
-    if (candFeatures.energy < 0.45) return false;
-  }
-  if (mood === 'chill' || subMood === 'mellow') {
-    if (candFeatures.energy > 0.75) return false;
-    if (candFeatures.loudness > -3) return false;
-  }
-  if (subMood === 'acoustic' || profile.isAcoustic) {
-    if (candFeatures.acousticness < 0.2) return false;
-  }
+const isVibeMatch = (track, playlistVibe) => {
+  // Simplified vibe matching based only on metadata
   return true;
 };
 
@@ -647,7 +576,7 @@ const decadeFromReleaseDate = (dateStr) => {
   return `${decade}s`;
 };
 
-const getArtistDeepCuts = async (artistId, api, playlistVibe, avgVibe, featuresAvailable) => {
+const getArtistDeepCuts = async (artistId, api, playlistVibe, avgVibe) => {
   try {
     const albumsData = await spotifyLimiter.execute(() =>
       api.getArtistAlbums(artistId, { limit: 20, include_groups: 'album,single' })
@@ -655,10 +584,6 @@ const getArtistDeepCuts = async (artistId, api, playlistVibe, avgVibe, featuresA
     const albums = albumsData.body.items;
     const randomAlbums = albums.sort(() => Math.random() - 0.5).slice(0, 2);
     const deepCuts = [];
-   
-    // Coletar TODOS os track IDs primeiro
-    const allTrackIds = [];
-    const albumTrackMap = new Map();
    
     for (const album of randomAlbums) {
       const tracksData = await spotifyLimiter.execute(() =>
@@ -670,26 +595,12 @@ const getArtistDeepCuts = async (artistId, api, playlistVibe, avgVibe, featuresA
         Math.floor(tracks.length * 0.6)
       );
      
-      middleTracks.forEach(t => {
-        allTrackIds.push(t.id);
-        albumTrackMap.set(t.id, { track: t, album });
-      });
-    }
-   
-    // ✅ BUSCAR features de TODAS as tracks de uma vez
-    if (featuresAvailable && allTrackIds.length > 0) {
-      const featMap = await fetchAudioFeaturesMap(api, allTrackIds);
-     
-      allTrackIds.forEach(trackId => {
-        const feat = featMap.get(trackId);
-        if (feat && isVibeMatch(feat, playlistVibe)) {
-          const { track, album } = albumTrackMap.get(trackId);
-          deepCuts.push({
-            ...track,
-            album: { images: album.images, release_date: album.release_date },
-            artists: [{ id: artistId, name: album.artists?.[0]?.name || 'Unknown' }]
-          });
-        }
+      middleTracks.forEach(track => {
+        deepCuts.push({
+          ...track,
+          album: { images: album.images, release_date: album.release_date },
+          artists: [{ id: artistId, name: album.artists?.[0]?.name || 'Unknown' }]
+        });
       });
     }
    
@@ -847,41 +758,7 @@ if (typeof fetch === 'undefined') {
 
 const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
 
-const estimateFeaturesFromTags = (tags = []) => {
-  let energy = 0.5, danceability = 0.5, valence = 0.5;
-  let acousticness = 0.05, tempo = 120, loudness = -8;
-  let speechiness = 0.05, instrumentalness = 0.0;
-  const tagSet = new Set(tags);
-  if (tagSet.has('energetic') || tagSet.has('party') || tagSet.has('dance')) { energy += 0.25; danceability += 0.25; tempo += 15; }
-  if (tagSet.has('upbeat') || tagSet.has('happy')) { energy += 0.15; valence += 0.15; }
-  if (tagSet.has('chill') || tagSet.has('relaxing') || tagSet.has('mellow')) { energy -= 0.25; acousticness += 0.4; valence -= 0.05; tempo -= 15; }
-  if (tagSet.has('acoustic') || tagSet.has('singer-songwriter')) { acousticness += 0.45; energy -= 0.15; }
-  if (tagSet.has('ambient') || tagSet.has('instrumental')) { instrumentalness += 0.6; energy -= 0.3; acousticness += 0.1; }
-  if (tagSet.has('rock') || tagSet.has('metal') || tagSet.has('heavy')) { energy += 0.2; loudness = -4; valence -= 0.05; }
-  if (tagSet.has('hip-hop') || tagSet.has('rap')) { speechiness += 0.12; tempo += 10; energy += 0.1; }
-  if (tagSet.has('electronic') || tagSet.has('edm')) { danceability += 0.15; energy += 0.15; tempo += 10; }
-  energy = clamp(energy);
-  danceability = clamp(danceability);
-  valence = clamp(valence);
-  acousticness = clamp(acousticness);
-  speechiness = clamp(speechiness);
-  instrumentalness = clamp(instrumentalness);
-  tempo = Math.round(Math.max(60, Math.min(180, tempo)));
-  loudness = Math.round(Math.max(-60, Math.min(0, loudness)));
-  return { danceability, energy, valence, acousticness, tempo, loudness, speechiness, instrumentalness };
-};
-
-const getEstimatedFeaturesForTrack = async (track, lastfmApiKey) => {
-  if (!lastfmApiKey || !track) return null;
-  try {
-    const tags = await getLastfmTags(track, lastfmApiKey);
-    if (!tags || tags.length === 0) return null;
-    const est = estimateFeaturesFromTags(tags);
-    return { id: track.id || null, ...est };
-  } catch (e) {
-    return null;
-  }
-};
+// Removed audio features estimation functions as they are no longer needed
 
 app.post('/analyze', async (req, res) => {
   const topTracksCache = new Map();
@@ -962,22 +839,7 @@ app.post('/analyze', async (req, res) => {
       speechiness: 0.1, instrumentalness: 0.1
     };
     let featuresAvailable = false;
-    if (seedIds.length > 0) {
-      // Pré-popula cache com TODAS as seeds de uma vez
-      const seedFeatMap = await fetchAudioFeaturesMap(api, seedIds);
-      const feats = Array.from(seedFeatMap.values()).filter(f => f);
- 
-      if (feats.length > 0) {
-        featuresAvailable = true;
-        const keys = ['danceability', 'energy', 'valence', 'acousticness',
-                      'tempo', 'loudness', 'speechiness', 'instrumentalness'];
-        keys.forEach(k =>
-          avgVibe[k] = feats.reduce((sum, f) => sum + (f[k] || 0), 0) / feats.length
-        );
-        console.log('✅ avgVibe calculado com cache:', avgVibe);
-      }
-    }
-    if (!featuresAvailable && lastfmApiKey) {
+    if (lastfmApiKey) {
       try {
         const estimated = [];
         for (const t of seedTracks.slice(0, 5)) {
@@ -1047,27 +909,7 @@ app.post('/analyze', async (req, res) => {
       }
       recTracks = [];
     }
-    if (featuresAvailable && recTracks.length > 0) {
-      const candIds = recTracks.map(t => t.id).slice(0, 50);
-      const featMap = await fetchAudioFeaturesMap(api, candIds);
-      for (const track of recTracks) {
-        const candFeatures = featMap.get(track.id);
-        let simScore = 85;
-        if (candFeatures) {
-          if (!isVibeMatch(candFeatures, playlistVibe)) continue;
-          simScore = calculateEnhancedVibeSimilarity(candFeatures, avgVibe, playlistVibe, culturalContext);
-        } else if (lastfmApiKey) {
-          if (!(await isVibeMatchByMetadata(track, playlistVibe, lastfmApiKey))) continue;
-          simScore = 80;
-        }
-        const classification = classifyCandidateByProximity(track, seedTracks, topArtistIds, relatedArtistSet);
-        simScore = Math.min(100, Math.round(simScore * classification.weight));
-        if (candidateTracks.length < MAX_CANDIDATES) {
-          candidateTracks.push({ ...track, similarity: simScore, _circle: classification.circle, _source: 'spotify-rec' });
-          uriSeen.add(track.uri);
-        }
-      }
-    } else {
+    if (recTracks.length > 0) {
       for (const track of recTracks) {
         let simScore = 85;
         if (lastfmApiKey) {
@@ -1110,18 +952,12 @@ app.post('/analyze', async (req, res) => {
       await Promise.all(similarPromises);
       console.log(`Artistas Last.fm identificados: ${lastfmArtistCandidates.size}`);
       const deepCutPromises = Array.from(lastfmArtistCandidates).slice(0, 8).map(async (lfArtistId) => {
-        const deepCuts = await getArtistDeepCuts(lfArtistId, api, playlistVibe, avgVibe, featuresAvailable);
-        const ids = deepCuts.map(t => t.id).filter(Boolean);
-        const featMap = featuresAvailable && ids.length > 0 ? await fetchAudioFeaturesMap(api, ids) : new Map();
+        const deepCuts = await getArtistDeepCuts(lfArtistId, api, playlistVibe, avgVibe, false);
         for (const track of deepCuts) {
           if (!uriSeen.has(track.uri) && candidateTracks.length < MAX_CANDIDATES) {
-            let simScore = 80;
-            if (featuresAvailable) {
-              const candFeatures = featMap.get(track.id);
-              if (candFeatures) simScore = calculateEnhancedVibeSimilarity(candFeatures, avgVibe, playlistVibe, culturalContext);
-            } else if (lastfmApiKey) {
+            let simScore = 75;
+            if (lastfmApiKey) {
               if (!(await isVibeMatchByMetadata(track, playlistVibe, lastfmApiKey))) continue;
-              simScore = 75;
             }
             const classification = classifyCandidateByProximity(track, seedTracks, topArtistIds, relatedArtistSet);
             simScore = Math.min(100, Math.round(simScore * classification.weight));
@@ -1200,18 +1036,12 @@ app.post('/analyze', async (req, res) => {
     }
     console.log('Minerando deep cuts de artistas nicho...');
     const nichePromises = nicheArtistIds.slice(0, 10).map(async (nicheId) => {
-      const deepCuts = await getArtistDeepCuts(nicheId, api, playlistVibe, avgVibe, featuresAvailable);
-      const ids = deepCuts.map(t => t.id).filter(Boolean);
-      const featMap = featuresAvailable && ids.length > 0 ? await fetchAudioFeaturesMap(api, ids) : new Map();
+      const deepCuts = await getArtistDeepCuts(nicheId, api, playlistVibe, avgVibe, false);
       for (const track of deepCuts) {
         if (!uriSeen.has(track.uri) && candidateTracks.length < MAX_CANDIDATES) {
-          let simScore = 75;
-          if (featuresAvailable) {
-            const candFeatures = featMap.get(track.id);
-            if (candFeatures) simScore = calculateEnhancedVibeSimilarity(candFeatures, avgVibe, playlistVibe);
-          } else if (lastfmApiKey) {
+          let simScore = 70;
+          if (lastfmApiKey) {
             if (!(await isVibeMatchByMetadata(track, playlistVibe, lastfmApiKey))) continue;
-            simScore = 70;
           }
           const classification = classifyCandidateByProximity(track, seedTracks, topArtistIds, relatedArtistSet);
           simScore = Math.min(100, Math.round(simScore * classification.weight));
@@ -1221,35 +1051,7 @@ app.post('/analyze', async (req, res) => {
       }
     });
     await Promise.all(nichePromises);
-    if (candidateTracks.length < 10 && useTopArtists && topArtistIds.length > 0) {
-      console.log('Adicionando deep cuts de top artists do usuário...');
-      const topDeepPromises = topArtistIds.slice(0, 3).map(async (artistId) => {
-        try {
-          const deepCuts = await getArtistDeepCuts(artistId, api, playlistVibe, avgVibe, featuresAvailable);
-          const ids = deepCuts.map(t => t.id).filter(Boolean);
-          const featMap = featuresAvailable && ids.length > 0 ? await fetchAudioFeaturesMap(api, ids) : new Map();
-          for (const track of deepCuts) {
-            if (!uriSeen.has(track.uri) && candidateTracks.length < MAX_CANDIDATES) {
-              let simScore = 80;
-              if (featuresAvailable) {
-                const candFeatures = featMap.get(track.id);
-                if (candFeatures) simScore = calculateEnhancedVibeSimilarity(candFeatures, avgVibe, playlistVibe, culturalContext);
-              } else if (lastfmApiKey) {
-                if (!(await isVibeMatchByMetadata(track, playlistVibe, lastfmApiKey))) continue;
-                simScore = 75;
-              }
-              const classification = classifyCandidateByProximity(track, seedTracks, topArtistIds, relatedArtistSet);
-              simScore = Math.min(100, Math.round(simScore * classification.weight));
-              candidateTracks.push({ ...track, similarity: simScore, _circle: classification.circle, _source: 'deep-cut' });
-              uriSeen.add(track.uri);
-            }
-          }
-        } catch (userTopErr) {
-          console.warn(`Erro em deep cuts de top artist ${artistId}:`, userTopErr.message);
-        }
-      });
-      await Promise.all(topDeepPromises);
-    } else if (candidateTracks.length < 10 && !useTopArtists) {
+    if (candidateTracks.length < 10 && !useTopArtists) {
       console.log('Pulando top tracks de user por mismatch de gênero. Considerando mais related artists.');
     }
     // Fase Mineração de Contexto Cultural (parallel)
@@ -1551,6 +1353,60 @@ app.get('/feedback-stats', (req, res) => {
     res.json(feedbackSystem.stats());
   } catch (err) {
     res.status(500).json({ error: 'Erro ao obter estatísticas' });
+  }
+});
+
+app.post('/lyrics', async (req, res) => {
+  try {
+    const { trackName, artistName } = req.body;
+    if (!trackName || !artistName) {
+      return res.status(400).json({ error: 'Track name and artist name are required' });
+    }
+
+    const musixmatchApiKey = process.env.MUSIXMATCH_API_KEY;
+    if (!musixmatchApiKey) {
+      return res.status(500).json({ error: 'Musixmatch API key not configured' });
+    }
+
+    // Primeiro, buscar o track_id usando matcher.track.get
+    const matcherUrl = `https://api.musixmatch.com/ws/1.1/matcher.track.get?q_track=${encodeURIComponent(trackName)}&q_artist=${encodeURIComponent(artistName)}&apikey=${musixmatchApiKey}`;
+    
+    const matcherResponse = await fetch(matcherUrl);
+    const matcherData = await matcherResponse.json();
+
+    if (matcherData.message.header.status_code !== 200) {
+      return res.status(404).json({ error: 'Track not found' });
+    }
+
+    const trackId = matcherData.message.body.track.track_id;
+
+    // Agora buscar as letras usando track.lyrics.get
+    const lyricsUrl = `https://api.musixmatch.com/ws/1.1/track.lyrics.get?track_id=${trackId}&apikey=${musixmatchApiKey}`;
+    
+    const lyricsResponse = await fetch(lyricsUrl);
+    const lyricsData = await lyricsResponse.json();
+
+    if (lyricsData.message.header.status_code !== 200) {
+      return res.status(404).json({ error: 'Lyrics not found' });
+    }
+
+    const lyrics = lyricsData.message.body.lyrics;
+    
+    // Retornar apenas um trecho das letras (primeiras 30% das palavras) conforme ToS
+    const words = lyrics.lyrics_body.split(' ');
+    const previewLength = Math.floor(words.length * 0.3);
+    const preview = words.slice(0, previewLength).join(' ') + '...';
+
+    res.json({
+      snippet: preview,
+      copyright: lyrics.lyrics_copyright,
+      tracking_url: lyrics.script_tracking_url,
+      explicit: lyrics.explicit === 1
+    });
+
+  } catch (err) {
+    console.error('Error in /lyrics:', err);
+    res.status(500).json({ error: 'Failed to fetch lyrics' });
   }
 });
 
