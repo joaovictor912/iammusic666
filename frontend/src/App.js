@@ -66,6 +66,8 @@ const Home = () => {
   const [feedbackStats, setFeedbackStats] = useState(null);
   const [showQualityMetrics, setShowQualityMetrics] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const [playingTrackId, setPlayingTrackId] = useState(null);
+  const [isPlaying, setIsPlaying] = useState(false);
   
   // Estados para gerenciar playlists salvas
   const [savedPlaylists, setSavedPlaylists] = useState([]);
@@ -77,19 +79,91 @@ const Home = () => {
   const [volume, setVolume] = useState(0.5);
   const searchTimeoutRef = useRef(null);
 
-  useEffect(() => {
-    audioRef.current.pause();
-    if (previewUrl) {
-      audioRef.current.src = previewUrl;
-      audioRef.current.volume = volume;
-      audioRef.current.play().catch(e => console.error("Erro de autoplay:", e));
-    }
-    return () => { audioRef.current.pause(); };
-  }, [previewUrl]);
+  // Removido efeito que pausava ao mudar previewUrl; o controle de playback
+  // fica inteiramente em togglePreview para não interromper o áudio.
+  // Mantemos apenas o efeito de volume abaixo.
 
   useEffect(() => {
     audioRef.current.volume = volume;
   }, [volume]);
+
+  // Atualiza estado baseado em eventos do audio (play/pause/end)
+  useEffect(() => {
+    const audio = audioRef.current;
+    const handlePlay = () => setIsPlaying(true);
+    const handlePause = () => setIsPlaying(false);
+    const handleEnded = () => {
+      setIsPlaying(false);
+      setPlayingTrackId(null);
+    };
+    audio.addEventListener('play', handlePlay);
+    audio.addEventListener('pause', handlePause);
+    audio.addEventListener('ended', handleEnded);
+    return () => {
+      audio.removeEventListener('play', handlePlay);
+      audio.removeEventListener('pause', handlePause);
+      audio.removeEventListener('ended', handleEnded);
+    };
+  }, []);
+
+  // Alterna a prévia de áudio para uma faixa
+  const togglePreview = async (track) => {
+    let ensuredPreviewUrl = track?.previewUrl || null;
+    if (!ensuredPreviewUrl) {
+      try {
+        const res = await fetch('http://127.0.0.1:5000/track-preview', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: track.id, name: track.name, artist: track.artist })
+        });
+        const data = await res.json();
+        if (data.previewUrl) {
+          ensuredPreviewUrl = data.previewUrl;
+          // Atualiza track na playlist ou seeds com a preview encontrada
+          setPlaylist(prev => prev.map(t => t.id === track.id ? { ...t, previewUrl: ensuredPreviewUrl } : t));
+          setSeedTracks(prev => prev.map(t => t.id === track.id ? { ...t, previewUrl: ensuredPreviewUrl } : t));
+        }
+      } catch (e) {
+        console.error('Falha ao obter prévia alternativa:', e);
+      }
+    }
+    if (!ensuredPreviewUrl) {
+      console.warn('Sem URL de prévia para esta faixa.', track?.name, '-', track?.artist);
+      return; // Ainda sem prévia — aborta
+    }
+    // Se já é a faixa atual, alterna play/pause
+    if (playingTrackId === track.id) {
+      if (isPlaying) {
+        audioRef.current.pause();
+      } else {
+        try {
+          audioRef.current.muted = false;
+          audioRef.current.volume = volume;
+          await audioRef.current.play();
+        } catch (e) {
+          console.error('Erro ao retomar a prévia:', e);
+        }
+      }
+      return;
+    }
+    // Nova faixa: define fonte e toca imediatamente (ação do usuário evita bloqueio)
+    try {
+      audioRef.current.pause();
+      audioRef.current.src = ensuredPreviewUrl;
+      audioRef.current.volume = volume;
+      audioRef.current.muted = false;
+      await audioRef.current.play();
+      setPlayingTrackId(track.id);
+      setIsPlaying(true);
+    } catch (e) {
+      console.error('Erro ao iniciar a prévia:', e);
+    }
+    // Atualiza estado e UI auxiliares
+    setPreviewUrl(ensuredPreviewUrl);
+    setCoverArtUrl(track.albumImages?.[0]?.url || '');
+    setTrackName(track.name);
+    setArtistName(track.artist);
+  };
 
   // Carregar estatísticas de feedback ao inicializar
   useEffect(() => {
@@ -352,14 +426,25 @@ const Home = () => {
   };
 
   const removeSeedTrack = (index) => {
+    const removed = seedTracks[index];
     const newSeedTracks = seedTracks.filter((_, i) => i !== index);
     setSeedTracks(newSeedTracks);
+    if (removed && removed.id === playingTrackId) {
+      audioRef.current.pause();
+      setPlayingTrackId(null);
+    }
   };
 
   const removeTrackFromPlaylist = (indexToRemove) => {
-    setPlaylist(currentPlaylist => 
-      currentPlaylist.filter((_, index) => index !== indexToRemove)
-    );
+    setPlaylist(currentPlaylist => {
+      const removed = currentPlaylist[indexToRemove];
+      const updated = currentPlaylist.filter((_, index) => index !== indexToRemove);
+      if (removed && removed.id === playingTrackId) {
+        audioRef.current.pause();
+        setPlayingTrackId(null);
+      }
+      return updated;
+    });
   };
 
   const handleAnalyze = async () => {
@@ -538,7 +623,11 @@ const Home = () => {
             ...styles.volumeControlContainer,
             ...(!previewUrl ? styles.volumeControlDisabled : {})
           }}>
-            <svg style={styles.volumeIcon} xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+            <svg 
+              style={styles.volumeIcon} 
+              xmlns="http://www.w3.org/2000/svg" 
+              viewBox="0 0 24 24"
+            >
               <path d="M5 17h-5v-10h5v10zm2-10v10l9 5v-20l-9 5zm11.008 2.093c.742.743 1.2 1.77 1.192 2.907-.008 1.137-.458 2.164-1.2 2.907l-1.414-1.414c.389-.39.624-.928.622-1.493-.002-.565-.24-1.102-.622-1.493l1.414-1.414zm3.555-3.556c1.488 1.488 2.404 3.518 2.402 5.663-.002 2.145-.92 4.175-2.402 5.663l-1.414-1.414c1.118-1.117 1.802-2.677 1.8-4.249-.002-1.572-.69-3.132-1.8-4.249l1.414-1.414z"/>
             </svg>
             <input 
@@ -768,6 +857,13 @@ const Home = () => {
                             <div style={styles.seedArtist}>{track.artist}</div>
                           </div>
                           <button
+                            onClick={() => togglePreview(track)}
+                            style={styles.playButton}
+                            title={(playingTrackId === track.id && isPlaying) ? 'Pause preview' : 'Play preview'}
+                          >
+                            {playingTrackId === track.id && isPlaying ? '❚❚' : '▶'}
+                          </button>
+                          <button
                             onClick={() => removeSeedTrack(index)}
                             style={styles.removeButton}
                             title="Remove track"
@@ -944,6 +1040,13 @@ const Home = () => {
                           </div>
                         </div>
                         <div style={styles.trackActions}>
+                          <button
+                            onClick={() => togglePreview(track)}
+                            style={styles.playButton}
+                            title={(playingTrackId === track.id && isPlaying) ? 'Pause preview' : 'Play preview'}
+                          >
+                            {playingTrackId === track.id && isPlaying ? '❚❚' : '▶'}
+                          </button>
                           {showFeedbackModal && (
                             <div style={styles.trackRating}>
                               {renderStars(trackRatings[track.id] || 0, (rating) => rateTrack(track.id, rating), 'small')}
@@ -1157,6 +1260,7 @@ const styles = {
     width: '18px',
     height: '18px',
     fill: '#666',
+    cursor: 'default',
   },
   volumeSlider: {
     WebkitAppearance: 'none',
@@ -1407,6 +1511,26 @@ const styles = {
     borderRadius: '4px',
     fontSize: '16px',
     transition: 'all 0.2s',
+  },
+  playButton: {
+    background: 'linear-gradient(to bottom, #ffffff, #f0f0f0)',
+    border: '1px solid #b0b0b4',
+    borderRadius: '50%',
+    width: '28px',
+    height: '28px',
+    minWidth: '28px',
+    minHeight: '28px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '12px',
+    cursor: 'pointer',
+    color: '#1a1a1a',
+    boxShadow: '0 1px 3px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.8)',
+  },
+  playButtonDisabled: {
+    opacity: 0.4,
+    cursor: 'not-allowed',
   },
   suggestionsDropdown: {
     position: 'absolute',

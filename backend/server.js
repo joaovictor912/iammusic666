@@ -34,6 +34,7 @@ const lastfmCache = new ApiCache(60 * 60 * 1000, 300);
 const spotifyCache = new ApiCache(60 * 60 * 1000, 300);
 const lastfmLimiter = new RateLimiter(2, 20);
 const spotifyLimiter = new RateLimiter(5, 20);
+const previewCache = new ApiCache(24 * 60 * 60 * 1000, 1000); // 24h cache para URLs de preview
 
 const artistGenresCache = new Map();
 
@@ -1556,6 +1557,61 @@ app.post('/export-playlist', async (req, res) => {
   } catch (err) {
     console.error('Erro em /export-playlist:', err.body || err);
     res.status(err.statusCode || 500).json({ error: err.message });
+  }
+});
+
+// Endpoint para obter URL de prévia de áudio via fontes alternativas (Deezer/iTunes)
+app.post('/track-preview', async (req, res) => {
+  try {
+    const { id, name, artist } = req.body || {};
+    const key = `preview:${(artist||'').toLowerCase()}:${(name||'').toLowerCase()}`;
+    const cached = previewCache.get(key);
+    if (cached) {
+      return res.json({ previewUrl: cached, source: 'cache' });
+    }
+
+    if (!name || !artist) {
+      return res.status(400).json({ error: 'Parâmetros insuficientes: name e artist são obrigatórios.' });
+    }
+
+    // 1) Tentar Deezer
+    try {
+      const q = `artist:"${artist}" track:"${name}"`;
+      const dzUrl = `https://api.deezer.com/search?q=${encodeURIComponent(q)}&limit=3`;
+      const dzRes = await fetch(dzUrl);
+      if (dzRes.ok) {
+        const dzData = await dzRes.json();
+        const match = (dzData.data || []).find(it => it.preview);
+        if (match && match.preview) {
+          previewCache.set(key, match.preview);
+          return res.json({ previewUrl: match.preview, source: 'deezer' });
+        }
+      }
+    } catch (e) {
+      console.warn('Deezer preview falhou:', e.message);
+    }
+
+    // 2) Tentar iTunes
+    try {
+      const term = `${artist} ${name}`;
+      const itUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&limit=5`;
+      const itRes = await fetch(itUrl);
+      if (itRes.ok) {
+        const itData = await itRes.json();
+        const candidate = (itData.results || []).find(r => r.previewUrl);
+        if (candidate && candidate.previewUrl) {
+          previewCache.set(key, candidate.previewUrl);
+          return res.json({ previewUrl: candidate.previewUrl, source: 'itunes' });
+        }
+      }
+    } catch (e) {
+      console.warn('iTunes preview falhou:', e.message);
+    }
+
+    return res.json({ previewUrl: null });
+  } catch (err) {
+    console.error('Erro em /track-preview:', err);
+    res.status(500).json({ error: 'Falha ao obter prévia.' });
   }
 });
 
