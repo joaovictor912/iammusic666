@@ -65,6 +65,7 @@ const Home = () => {
   const [overallRating, setOverallRating] = useState(0);
   const [feedbackStats, setFeedbackStats] = useState(null);
   const [showQualityMetrics, setShowQualityMetrics] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
   
   // Estados para gerenciar playlists salvas
   const [savedPlaylists, setSavedPlaylists] = useState([]);
@@ -784,7 +785,8 @@ const Home = () => {
                 <div>
                   <div style={styles.playlistHeaderContainer}>
                     <div style={styles.playlistHeader}>
-                      Generated Playlist ({playlist.length} tracks)
+                      Generated Playlist<br />
+                      ({playlist.length} tracks)
                     </div>
                     <div style={styles.playlistActions}>
                       <button 
@@ -865,8 +867,32 @@ const Home = () => {
                     </div>
                   )}
 
+                  {/* Toggle bar for details (like seed tracks bar) */}
+                  {(playlistAnalysis?.culturalContext || playlistAnalysis?.inferredVibe) && (
+                    <div 
+                      style={{
+                        ...styles.trackCounter,
+                        marginBottom: '8px'
+                      }}
+                      onClick={() => setShowDetails(!showDetails)}
+                    >
+                      <span>Playlist details</span>
+                      <svg 
+                        width="12" 
+                        height="12" 
+                        viewBox="0 0 12 12" 
+                        style={{
+                          ...styles.arrowIcon,
+                          transform: showDetails ? 'rotate(180deg)' : 'rotate(0deg)'
+                        }}
+                      >
+                        <path d="M6 9L1 4h10z" fill="currentColor"/>
+                      </svg>
+                    </div>
+                  )}
+
                   {/* Análise Cultural */}
-                  {playlistAnalysis?.culturalContext && (
+                  {playlistAnalysis?.culturalContext && showDetails && (
                     <div style={styles.culturalAnalysisContainer}>
                       <h3 style={styles.culturalTitle}>Cultural Analysis</h3>
                       <div style={styles.culturalInfo}>
@@ -884,7 +910,7 @@ const Home = () => {
                   )}
 
                   {/* Vibe Analysis */}
-                  {playlistAnalysis?.inferredVibe && (
+                  {playlistAnalysis?.inferredVibe && showDetails && (
                     <div style={styles.vibeAnalysisContainer}>
                       <h3 style={styles.vibeTitle}>Musical Vibe</h3>
                       <div style={styles.vibeInfo}>
@@ -914,11 +940,7 @@ const Home = () => {
                           <div style={styles.trackDetails}>
                             <div style={styles.listItemName}>{track.name}</div>
                             <div style={styles.listItemArtist}>{track.artist}</div>
-                            {track.similarity && (
-                              <div style={styles.similarityBadge}>
-                                {track.similarity}% match
-                              </div>
-                            )}
+                            {/* Similarity badge removed per request */}
                           </div>
                         </div>
                         <div style={styles.trackActions}>
@@ -1502,17 +1524,17 @@ const styles = {
     alignItems: 'center',
   },
   qualityButton: {
-    background: 'linear-gradient(to bottom, #ff9500, #ff6b00)',
+    background: 'linear-gradient(to bottom, #007aff, #0051d5)',
     color: '#fff',
-    borderColor: '#ff6b00',
+    borderColor: '#0051d5',
     fontWeight: '600',
     fontSize: '12px',
     padding: '6px 12px',
   },
   feedbackButton: {
-    background: 'linear-gradient(to bottom, #ff3b30, #d70015)',
+    background: 'linear-gradient(to bottom, #007aff, #0051d5)',
     color: '#fff',
-    borderColor: '#d70015',
+    borderColor: '#0051d5',
     fontWeight: '600',
     fontSize: '12px',
     padding: '6px 12px',
