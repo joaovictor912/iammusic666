@@ -79,9 +79,6 @@ const Home = () => {
   const [volume, setVolume] = useState(0.5);
   const searchTimeoutRef = useRef(null);
 
-  // Removido efeito que pausava ao mudar previewUrl; o controle de playback
-  // fica inteiramente em togglePreview para não interromper o áudio.
-  // Mantemos apenas o efeito de volume abaixo.
 
   useEffect(() => {
     audioRef.current.volume = volume;

@@ -20,7 +20,7 @@ class ApiCache {
 
   set(key, value, priority = null) {
     if (typeof key !== 'string') throw new Error('Key must be string');
-    this.del(key); // Evict se existir
+    this.del(key); 
     
     // Determinar prioridade automaticamente baseada na chave
     if (priority === null) {
