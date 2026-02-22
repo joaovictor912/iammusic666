@@ -37,7 +37,10 @@ const lastfmCache = new ApiCache(60 * 60 * 1000, 300);
 const spotifyCache = new ApiCache(60 * 60 * 1000, 300);
 const lastfmLimiter = new RateLimiter(2, 20);
 const spotifyLimiter = new RateLimiter(5, 20);
+const deezerLimiter = new RateLimiter(5, 20);  // Deezer: ~50 req/5s
+const itunesLimiter = new RateLimiter(2, 20);  // iTunes: ~20 req/min (conservador)
 const previewCache = new ApiCache(24 * 60 * 60 * 1000, 1000); // 24h cache para URLs de preview
+
 
 const artistGenresCache = new Map();
 
@@ -1561,11 +1564,11 @@ app.post('/track-preview', async (req, res) => {
       return res.status(400).json({ error: 'Parâmetros insuficientes: name e artist são obrigatórios.' });
     }
 
-    // 1) Tentar Deezer
+    // 1) Tentar Deezer (com rate limiting)
     try {
       const q = `artist:"${artist}" track:"${name}"`;
       const dzUrl = `https://api.deezer.com/search?q=${encodeURIComponent(q)}&limit=3`;
-      const dzRes = await fetch(dzUrl);
+      const dzRes = await deezerLimiter.execute(() => fetch(dzUrl));
       if (dzRes.ok) {
         const dzData = await dzRes.json();
         const match = (dzData.data || []).find(it => it.preview);
@@ -1578,11 +1581,11 @@ app.post('/track-preview', async (req, res) => {
       console.warn('Deezer preview falhou:', e.message);
     }
 
-    // 2) Tentar iTunes
+    // 2) Tentar iTunes (com rate limiting)
     try {
       const term = `${artist} ${name}`;
       const itUrl = `https://itunes.apple.com/search?term=${encodeURIComponent(term)}&media=music&limit=5`;
-      const itRes = await fetch(itUrl);
+      const itRes = await itunesLimiter.execute(() => fetch(itUrl));
       if (itRes.ok) {
         const itData = await itRes.json();
         const candidate = (itData.results || []).find(r => r.previewUrl);

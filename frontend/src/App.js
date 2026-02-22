@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
-import { motion, useMotionValue, useSpring } from 'framer-motion';
+import { motion, useMotionValue, useSpring, AnimatePresence } from 'framer-motion';
 
 const TiltCard = ({ children, ...props }) => {
   const x = useMotionValue(0);
@@ -74,6 +74,8 @@ const Home = () => {
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [playlistName, setPlaylistName] = useState('');
   const [showSavedPlaylists, setShowSavedPlaylists] = useState(false);
+  const [showMainMenu, setShowMainMenu] = useState(false);
+  const [showPlaylistMenu, setShowPlaylistMenu] = useState(false);
 
   const audioRef = useRef(new Audio());
   const [volume, setVolume] = useState(0.5);
@@ -759,65 +761,89 @@ const Home = () => {
                   >
                     {loading ? 'Mixing...' : 'Mix Playlist'}
                   </button>
-                  <button 
-                    onClick={resetPlaylist}
-                    style={{
-                      ...styles.ipodButton,
-                      ...styles.resetButton,
-                      ...(playlist.length === 0 && seedTracks.length === 0 ? styles.buttonDisabled : {})
-                    }}
-                    disabled={playlist.length === 0 && seedTracks.length === 0}
-                  >
-                    Reset
-                  </button>
+                  {(playlist.length > 0 || seedTracks.length > 0 || savedPlaylists.length > 0) && (
+                    <div style={{ position: 'relative' }}>
+                      <button 
+                        onClick={(e) => { e.stopPropagation(); setShowMainMenu(!showMainMenu); setShowPlaylistMenu(false); }}
+                        style={{
+                          ...styles.ipodButton,
+                          ...styles.moreButton,
+                          padding: '10px 14px'
+                        }}
+                      >
+                        ...
+                      </button>
+                      <AnimatePresence>
+                        {showMainMenu && (
+                          <motion.div
+                            initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                            transition={{ duration: 0.15 }}
+                            style={styles.actionsMenu}
+                          >
+                            <button 
+                              onClick={() => { resetPlaylist(); setShowMainMenu(false); }}
+                              style={styles.actionMenuItem}
+                              disabled={playlist.length === 0 && seedTracks.length === 0}
+                            >
+                              Reset All
+                            </button>
+                            {savedPlaylists.length > 0 && (
+                              <button 
+                                onClick={() => { setShowSavedPlaylists(!showSavedPlaylists); setShowMainMenu(false); }}
+                                style={styles.actionMenuItem}
+                              >
+                                Saved ({savedPlaylists.length})
+                              </button>
+                            )}
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  )}
                 </div>
                 
-                {/* Botão para ver playlists salvas */}
-                {savedPlaylists.length > 0 && (
-                  <div style={styles.savedPlaylistsSection}>
-                    <button 
-                      onClick={() => setShowSavedPlaylists(!showSavedPlaylists)}
-                      style={{
-                        ...styles.ipodButton,
-                        ...styles.savedPlaylistsButton
-                      }}
+                {/* Saved Playlists - agora controlado pelo menu */}
+                <AnimatePresence>
+                  {showSavedPlaylists && savedPlaylists.length > 0 && (
+                    <motion.div 
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: 'auto' }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.2 }}
+                      style={styles.savedPlaylistsContainer}
                     >
-                      {showSavedPlaylists ? 'Hide Saved' : `Saved Playlists (${savedPlaylists.length})`}
-                    </button>
-                    
-                    {showSavedPlaylists && (
-                      <div style={styles.savedPlaylistsContainer}>
-                        <h3 style={styles.savedPlaylistsTitle}>Playlists Salvas</h3>
-                        <div style={styles.savedPlaylistsList}>
-                          {savedPlaylists.map((savedPlaylist) => (
-                            <div key={savedPlaylist.id} style={styles.savedPlaylistItem}>
-                              <div style={styles.savedPlaylistInfo}>
-                                <div style={styles.savedPlaylistName}>{savedPlaylist.name}</div>
-                                <div style={styles.savedPlaylistMeta}>
-                                  {savedPlaylist.tracks.length} tracks • {new Date(savedPlaylist.createdAt).toLocaleDateString()}
-                                </div>
-                              </div>
-                              <div style={styles.savedPlaylistActions}>
-                                <button 
-                                  onClick={() => loadPlaylist(savedPlaylist)}
-                                  style={styles.loadButton}
-                                >
-                                  Load
-                                </button>
-                                <button 
-                                  onClick={() => deletePlaylist(savedPlaylist.id)}
-                                  style={styles.deleteButton}
-                                >
-                                  Delete
-                                </button>
+                      <h3 style={styles.savedPlaylistsTitle}>Playlists Salvas</h3>
+                      <div style={styles.savedPlaylistsList}>
+                        {savedPlaylists.map((savedPlaylist) => (
+                          <div key={savedPlaylist.id} style={styles.savedPlaylistItem}>
+                            <div style={styles.savedPlaylistInfo}>
+                              <div style={styles.savedPlaylistName}>{savedPlaylist.name}</div>
+                              <div style={styles.savedPlaylistMeta}>
+                                {savedPlaylist.tracks.length} tracks • {new Date(savedPlaylist.createdAt).toLocaleDateString()}
                               </div>
                             </div>
-                          ))}
-                        </div>
+                            <div style={styles.savedPlaylistActions}>
+                              <button 
+                                onClick={() => loadPlaylist(savedPlaylist)}
+                                style={styles.loadButton}
+                              >
+                                Load
+                              </button>
+                              <button 
+                                onClick={() => deletePlaylist(savedPlaylist.id)}
+                                style={styles.deleteButton}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    )}
-                  </div>
-                )}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
               
               {seedTracks.length > 0 && (
@@ -875,40 +901,16 @@ const Home = () => {
               )}
               
               {playlist.length > 0 && (
-                <div>
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3 }}
+                >
                   <div style={styles.playlistHeaderContainer}>
                     <div style={styles.playlistHeader}>
-                      Generated Playlist<br />
-                      ({playlist.length} tracks)
+                      {playlist.length} tracks
                     </div>
                     <div style={styles.playlistActions}>
-                      <button 
-                        onClick={() => setShowQualityMetrics(!showQualityMetrics)}
-                        style={{
-                          ...styles.ipodButton,
-                          ...styles.qualityButton
-                        }}
-                      >
-                        {showQualityMetrics ? 'Hide Quality' : 'Show Quality'}
-                      </button>
-                      <button 
-                        onClick={() => setShowFeedbackModal(true)}
-                        style={{
-                          ...styles.ipodButton,
-                          ...styles.feedbackButton
-                        }}
-                      >
-                        Rate Playlist
-                      </button>
-                      <button 
-                        onClick={() => setShowSaveModal(true)}
-                        style={{
-                          ...styles.ipodButton,
-                          ...styles.saveButton
-                        }}
-                      >
-                        Save Playlist
-                      </button>
                       <button 
                         onClick={handleExportToSpotify} 
                         style={{
@@ -917,48 +919,87 @@ const Home = () => {
                         }}
                         disabled={exporting}
                       >
-                        {exporting ? 'Exporting...' : 'Export to Spotify'}
+                        {exporting ? '...' : '↗ Export'}
                       </button>
+                      <div style={{ position: 'relative' }}>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); setShowPlaylistMenu(!showPlaylistMenu); setShowMainMenu(false); }}
+                          style={{
+                            ...styles.ipodButton,
+                            ...styles.moreButton,
+                            padding: '6px 10px'
+                          }}
+                        >
+                          ...
+                        </button>
+                        <AnimatePresence>
+                          {showPlaylistMenu && (
+                            <motion.div
+                              initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                              animate={{ opacity: 1, y: 0, scale: 1 }}
+                              exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                              transition={{ duration: 0.15 }}
+                              style={{...styles.actionsMenu, right: 0, left: 'auto'}}
+                            >
+                              <button 
+                                onClick={() => { setShowQualityMetrics(!showQualityMetrics); setShowPlaylistMenu(false); }}
+                                style={styles.actionMenuItem}
+                              >
+                                {showQualityMetrics ? 'Hide' : 'Show'} Quality
+                              </button>
+                              <button 
+                                onClick={() => { setShowFeedbackModal(true); setShowPlaylistMenu(false); }}
+                                style={styles.actionMenuItem}
+                              >
+                                Rate Playlist
+                              </button>
+                              <button 
+                                onClick={() => { setShowSaveModal(true); setShowPlaylistMenu(false); }}
+                                style={styles.actionMenuItem}
+                              >
+                                Save Playlist
+                              </button>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                      </div>
                     </div>
                   </div>
 
                   {/* Métricas de Qualidade */}
-                  {showQualityMetrics && playlistAnalysis?.qualityValidation && (
-                    <div style={styles.qualityMetricsContainer}>
-                      <h3 style={styles.qualityTitle}>Playlist Quality Analysis</h3>
-                      <div style={styles.qualityScore}>
-                        Overall Score: <span style={styles.scoreValue}>{playlistAnalysis.qualityValidation.score}/100</span>
-                      </div>
-                      <div style={styles.metricsGrid}>
-                        <div style={styles.metricItem}>
-                          <div style={styles.metricLabel}>Coherence</div>
-                          <div style={styles.metricValue}>{playlistAnalysis.qualityValidation.metrics.coherence}%</div>
+                  <AnimatePresence>
+                    {showQualityMetrics && playlistAnalysis?.qualityValidation && (
+                      <motion.div 
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        transition={{ duration: 0.2 }}
+                        style={styles.qualityMetricsContainer}
+                      >
+                        <div style={styles.qualityScore}>
+                          Score: <span style={styles.scoreValue}>{playlistAnalysis.qualityValidation.score}/100</span>
                         </div>
-                        <div style={styles.metricItem}>
-                          <div style={styles.metricLabel}>Diversity</div>
-                          <div style={styles.metricValue}>{playlistAnalysis.qualityValidation.metrics.diversity}%</div>
-                        </div>
-                        <div style={styles.metricItem}>
-                          <div style={styles.metricLabel}>Flow</div>
-                          <div style={styles.metricValue}>{playlistAnalysis.qualityValidation.metrics.flow}%</div>
-                        </div>
-                        <div style={styles.metricItem}>
-                          <div style={styles.metricLabel}>Cultural Consistency</div>
+                        <div style={styles.metricsGrid}>
+                          <div style={styles.metricItem}>
+                            <div style={styles.metricLabel}>Coherence</div>
+                            <div style={styles.metricValue}>{playlistAnalysis.qualityValidation.metrics.coherence}%</div>
+                          </div>
+                          <div style={styles.metricItem}>
+                            <div style={styles.metricLabel}>Diversity</div>
+                            <div style={styles.metricValue}>{playlistAnalysis.qualityValidation.metrics.diversity}%</div>
+                          </div>
+                          <div style={styles.metricItem}>
+                            <div style={styles.metricLabel}>Flow</div>
+                            <div style={styles.metricValue}>{playlistAnalysis.qualityValidation.metrics.flow}%</div>
+                          </div>
+                          <div style={styles.metricItem}>
+                          <div style={styles.metricLabel}>Cultural</div>
                           <div style={styles.metricValue}>{playlistAnalysis.qualityValidation.metrics.culturalConsistency}%</div>
                         </div>
                       </div>
-                      {playlistAnalysis.qualityValidation.recommendations.length > 0 && (
-                        <div style={styles.recommendationsContainer}>
-                          <h4 style={styles.recommendationsTitle}>Recommendations:</h4>
-                          <ul style={styles.recommendationsList}>
-                            {playlistAnalysis.qualityValidation.recommendations.map((rec, index) => (
-                              <li key={index} style={styles.recommendationItem}>{rec}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
                   {/* Toggle bar for details (like seed tracks bar) */}
                   {(playlistAnalysis?.culturalContext || playlistAnalysis?.inferredVibe) && (
@@ -969,7 +1010,7 @@ const Home = () => {
                       }}
                       onClick={() => setShowDetails(!showDetails)}
                     >
-                      <span>Playlist details</span>
+                      <span> Playlist details</span>
                       <svg 
                         width="12" 
                         height="12" 
@@ -984,46 +1025,58 @@ const Home = () => {
                     </div>
                   )}
 
-                  {/* Análise Cultural */}
-                  {playlistAnalysis?.culturalContext && showDetails && (
-                    <div style={styles.culturalAnalysisContainer}>
-                      <h3 style={styles.culturalTitle}>Cultural Analysis</h3>
-                      <div style={styles.culturalInfo}>
-                        <div style={styles.culturalItem}>
-                          <strong>Era:</strong> {playlistAnalysis.culturalContext.culturalEra}
-                        </div>
-                        <div style={styles.culturalItem}>
-                          <strong>Time Range:</strong> {playlistAnalysis.culturalContext.timeRange[0]} - {playlistAnalysis.culturalContext.timeRange[1]}
-                        </div>
-                        <div style={styles.culturalItem}>
-                          <strong>Keywords:</strong> {playlistAnalysis.culturalContext.eraKeywords.join(', ')}
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                  {/* Análise Cultural e Vibe - com animação */}
+                  <AnimatePresence>
+                    {showDetails && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        transition={{ duration: 0.2 }}
+                      >
+                        {playlistAnalysis?.culturalContext && (
+                          <div style={styles.culturalAnalysisContainer}>
+                            <div style={styles.culturalInfo}>
+                              <div style={styles.culturalItem}>
+                                <strong>Era:</strong> {playlistAnalysis.culturalContext.culturalEra}
+                              </div>
+                              <div style={styles.culturalItem}>
+                                <strong>Time Range:</strong> {playlistAnalysis.culturalContext.timeRange[0]} - {playlistAnalysis.culturalContext.timeRange[1]}
+                              </div>
+                              <div style={styles.culturalItem}>
+                                <strong>Keywords:</strong> {playlistAnalysis.culturalContext.eraKeywords.slice(0, 3).join(', ')}
+                              </div>
+                            </div>
+                          </div>
+                        )}
 
-                  {/* Vibe Analysis */}
-                  {playlistAnalysis?.inferredVibe && showDetails && (
-                    <div style={styles.vibeAnalysisContainer}>
-                      <h3 style={styles.vibeTitle}>Musical Vibe</h3>
-                      <div style={styles.vibeInfo}>
-                        <div style={styles.vibeItem}>
-                          <strong>Mood:</strong> {playlistAnalysis.inferredVibe.mood}
-                          {playlistAnalysis.inferredVibe.subMood && ` (${playlistAnalysis.inferredVibe.subMood})`}
-                        </div>
-                        <div style={styles.vibeItem}>
-                          <strong>Description:</strong> {playlistAnalysis.inferredVibe.description}
-                        </div>
-                        <div style={styles.vibeItem}>
-                          <strong>Confidence:</strong> {playlistAnalysis.inferredVibe.confidence}%
-                        </div>
-                      </div>
-                    </div>
-                  )}
+                        {/* Vibe Analysis */}
+                        {playlistAnalysis?.inferredVibe && (
+                          <div style={styles.vibeAnalysisContainer}>
+                            <div style={styles.vibeInfo}>
+                              <div style={styles.vibeItem}>
+                                <strong>Mood:</strong> {playlistAnalysis.inferredVibe.mood}
+                                {playlistAnalysis.inferredVibe.subMood && ` (${playlistAnalysis.inferredVibe.subMood})`}
+                              </div>
+                              <div style={styles.vibeItem}>
+                                <strong>Confidence:</strong> {playlistAnalysis.inferredVibe.confidence}%
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                   
                   <ul style={styles.ipodList}>
                     {playlist.map((track, index) => (
-                      <li key={index} style={styles.ipodListItem}>
+                      <motion.li 
+                        key={index} 
+                        style={styles.ipodListItem}
+                        initial={{ opacity: 0, x: -20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ duration: 0.2, delay: index * 0.02 }}
+                      >
                         <div style={styles.trackInfoContainer}>
                           <img 
                             src={track.albumImages?.[0]?.url || ''} 
@@ -1033,7 +1086,6 @@ const Home = () => {
                           <div style={styles.trackDetails}>
                             <div style={styles.listItemName}>{track.name}</div>
                             <div style={styles.listItemArtist}>{track.artist}</div>
-                            {/* Similarity badge removed per request */}
                           </div>
                         </div>
                         <div style={styles.trackActions}>
@@ -1044,11 +1096,6 @@ const Home = () => {
                           >
                             {playingTrackId === track.id && isPlaying ? '❚❚' : '▶'}
                           </button>
-                          {showFeedbackModal && (
-                            <div style={styles.trackRating}>
-                              {renderStars(trackRatings[track.id] || 0, (rating) => rateTrack(track.id, rating), 'small')}
-                            </div>
-                          )}
                           <button
                             onClick={() => removeTrackFromPlaylist(index)}
                             style={styles.removeButton}
@@ -1057,10 +1104,10 @@ const Home = () => {
                             ✕
                           </button>
                         </div>
-                      </li>
+                      </motion.li>
                     ))}
                   </ul>
-                </div>
+                </motion.div>
               )}
             </div>
           )}
@@ -1188,26 +1235,58 @@ const Home = () => {
         </div>
       )}
 
-      {/* Estatísticas de Feedback */}
-      {feedbackStats && (
-        <div style={styles.feedbackStatsContainer}>
-          <div style={styles.statsTitle}>System Statistics</div>
-          <div style={styles.statsGrid}>
-            <div style={styles.statItem}>
-              <div style={styles.statValue}>{feedbackStats.totalFeedbacks || 0}</div>
-              <div style={styles.statLabel}>Total Feedbacks</div>
-            </div>
-            <div style={styles.statItem}>
-              <div style={styles.statValue}>{feedbackStats.trackRatings || 0}</div>
-              <div style={styles.statLabel}>Track Ratings</div>
-            </div>
-            <div style={styles.statItem}>
-              <div style={styles.statValue}>{feedbackStats.avgRating ? feedbackStats.avgRating.toFixed(1) : 'N/A'}</div>
-              <div style={styles.statLabel}>Avg Rating</div>
-            </div>
+      {/* Footer de Atribuições - Requerido pelas APIs */}
+      <footer style={styles.attributionFooter}>
+        <div style={styles.attributionContainer}>
+          <span style={styles.attributionText}>Powered by</span>
+          <div style={styles.attributionLogos}>
+            <a 
+              href="https://spotify.com" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              style={styles.attributionLink}
+              title="Spotify"
+            >
+              <svg style={styles.attributionIcon} viewBox="0 0 24 24" fill="#1DB954">
+                <path d="M12 0C5.4 0 0 5.4 0 12s5.4 12 12 12 12-5.4 12-12S18.66 0 12 0zm5.521 17.34c-.24.359-.66.48-1.021.24-2.82-1.74-6.36-2.101-10.561-1.141-.418.122-.779-.179-.899-.539-.12-.421.18-.78.54-.9 4.56-1.021 8.52-.6 11.64 1.32.42.18.479.659.301 1.02zm1.44-3.3c-.301.42-.841.6-1.262.3-3.239-1.98-8.159-2.58-11.939-1.38-.479.12-1.02-.12-1.14-.6-.12-.48.12-1.021.6-1.141C9.6 9.9 15 10.561 18.72 12.84c.361.181.54.78.241 1.2zm.12-3.36C15.24 8.4 8.82 8.16 5.16 9.301c-.6.179-1.2-.181-1.38-.721-.18-.601.18-1.2.72-1.381 4.26-1.26 11.28-1.02 15.721 1.621.539.3.719 1.02.419 1.56-.299.421-1.02.599-1.559.3z"/>
+              </svg>
+            </a>
+            <a 
+              href="https://www.deezer.com" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              style={styles.attributionLink}
+              title="Deezer"
+            >
+              <svg style={styles.attributionIcon} viewBox="0 0 24 24" fill="#FEAA2D">
+                <path d="M18.81 4.16v3.03H24V4.16h-5.19zM6.27 8.38v3.027h5.189V8.38h-5.19zm12.54 0v3.027H24V8.38h-5.19zM0 12.58v3.03h5.19v-3.03H0zm6.27 0v3.03h5.19v-3.03h-5.19zm6.27 0v3.03h5.19v-3.03h-5.19zm6.27 0v3.03H24v-3.03h-5.19zM0 16.81v3.03h5.19v-3.03H0zm6.27 0v3.03h5.19v-3.03h-5.19zm6.27 0v3.03h5.19v-3.03h-5.19zm6.27 0v3.03H24v-3.03h-5.19z"/>
+              </svg>
+            </a>
+            <a 
+              href="https://www.last.fm" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              style={styles.attributionLink}
+              title="Last.fm"
+            >
+              <svg style={styles.attributionIcon} viewBox="0 0 24 24" fill="#D51007">
+                <path d="M10.584 17.21l-.88-2.392s-1.43 1.594-3.573 1.594c-1.897 0-3.244-1.649-3.244-4.288 0-3.381 1.704-4.591 3.381-4.591 2.42 0 3.189 1.567 3.849 3.574l.88 2.749c.88 2.666 2.529 4.81 7.285 4.81 3.409 0 5.718-1.044 5.718-3.793 0-2.227-1.265-3.381-3.63-3.931l-1.758-.385c-1.21-.275-1.567-.77-1.567-1.595 0-.934.742-1.484 1.952-1.484 1.32 0 2.034.495 2.144 1.677l2.749-.33c-.22-2.474-1.924-3.492-4.729-3.492-2.474 0-4.893.935-4.893 3.932 0 1.87.907 3.051 3.189 3.601l1.87.44c1.402.33 1.869.907 1.869 1.704 0 1.017-.99 1.43-2.86 1.43-2.776 0-3.93-1.457-4.59-3.464l-.907-2.75c-1.155-3.573-2.997-4.893-6.653-4.893C2.144 5.333 0 7.89 0 12.233c0 4.18 2.144 6.434 5.993 6.434 3.106 0 4.591-1.457 4.591-1.457z"/>
+              </svg>
+            </a>
+            <a 
+              href="https://www.musixmatch.com" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              style={styles.attributionLink}
+              title="Musixmatch"
+            >
+              <svg style={styles.attributionIcon} viewBox="0 0 24 24" fill="#FF6B35">
+                <path d="M22.543 5.794c-2.327-2.073-5.557-2.475-8.288-1.092-1.263.639-2.263 1.591-3.073 2.745-.81-1.154-1.81-2.106-3.073-2.745C5.378 3.319 2.148 3.721-.179 5.794c-.276.246-.276.665 0 .911 2.327 2.073 5.557 2.475 8.288 1.092 1.263-.639 2.263-1.591 3.073-2.745.81 1.154 1.81 2.106 3.073 2.745 2.731 1.383 5.961.981 8.288-1.092.276-.246.276-.665 0-.911zM22.543 11.543c-2.327-2.073-5.557-2.475-8.288-1.092-1.263.639-2.263 1.591-3.073 2.745-.81-1.154-1.81-2.106-3.073-2.745-2.731-1.383-5.961-.981-8.288 1.092-.276.246-.276.665 0 .911 2.327 2.073 5.557 2.475 8.288 1.092 1.263-.639 2.263-1.591 3.073-2.745.81 1.154 1.81 2.106 3.073 2.745 2.731 1.383 5.961.981 8.288-1.092.276-.246.276-.665 0-.911zM22.543 17.294c-2.327-2.073-5.557-2.475-8.288-1.092-1.263.639-2.263 1.591-3.073 2.745-.81-1.154-1.81-2.106-3.073-2.745-2.731-1.383-5.961-.981-8.288 1.092-.276.246-.276.665 0 .911 2.327 2.073 5.557 2.475 8.288 1.092 1.263-.639 2.263-1.591 3.073-2.745.81 1.154 1.81 2.106 3.073 2.745 2.731 1.383 5.961.981 8.288-1.092.276-.246.276-.665 0-.911z"/>
+              </svg>
+            </a>
           </div>
         </div>
-      )}
+      </footer>
     </div>
   );
 };
@@ -1896,6 +1975,41 @@ const styles = {
     cursor: 'pointer',
     color: '#fff',
   },
+  
+  // Menu de ações dropdown
+  moreButton: {
+    background: 'linear-gradient(to bottom, #f8f8f8, #e8e8e8)',
+    color: '#666',
+    fontSize: '18px',
+    fontWeight: '700',
+    minWidth: '36px',
+  },
+  actionsMenu: {
+    position: 'absolute',
+    top: 'calc(100% + 8px)',
+    left: 0,
+    background: '#fff',
+    borderRadius: '10px',
+    boxShadow: '0 8px 24px rgba(0,0,0,0.2)',
+    minWidth: '160px',
+    zIndex: 1000,
+    overflow: 'hidden',
+    border: '1px solid rgba(0,0,0,0.1)',
+  },
+  actionMenuItem: {
+    display: 'block',
+    width: '100%',
+    padding: '12px 16px',
+    border: 'none',
+    background: 'transparent',
+    textAlign: 'left',
+    fontSize: '13px',
+    color: '#333',
+    cursor: 'pointer',
+    transition: 'background 0.1s',
+    fontFamily: 'inherit',
+  },
+  
   feedbackStatsContainer: {
     position: 'fixed',
     bottom: '20px',
@@ -2071,6 +2185,49 @@ const styles = {
     color: '#007aff',
     marginTop: '4px',
     fontWeight: '500',
+  },
+  
+  // Estilos para Footer de Atribuições
+  attributionFooter: {
+    position: 'fixed',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    background: 'linear-gradient(to bottom, rgba(232, 232, 232, 0.95), rgba(220, 220, 220, 0.98))',
+    borderTop: '1px solid #c8c8cc',
+    padding: '8px 16px',
+    zIndex: 50,
+    backdropFilter: 'blur(10px)',
+    WebkitBackdropFilter: 'blur(10px)',
+  },
+  attributionContainer: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '12px',
+  },
+  attributionText: {
+    fontSize: '11px',
+    color: '#666',
+    fontWeight: '500',
+    letterSpacing: '0.3px',
+  },
+  attributionLogos: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
+  attributionLink: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    opacity: 0.7,
+    transition: 'opacity 0.2s ease, transform 0.2s ease',
+    textDecoration: 'none',
+  },
+  attributionIcon: {
+    width: '20px',
+    height: '20px',
   },
 };
 
